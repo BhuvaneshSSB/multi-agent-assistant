@@ -1,44 +1,57 @@
+import { Mastra } from "@mastra/core";
+import { PostgresStore, PgVector } from "@mastra/pg";
+import { Memory } from "@mastra/memory";
+import { ModelRouterEmbeddingModel } from "@mastra/core/llm";
+import { config } from "../config/env";
 
-import { Mastra } from '@mastra/core/mastra';
-import { PinoLogger } from '@mastra/loggers';
-import { LibSQLStore } from '@mastra/libsql';
-import { DuckDBStore } from "@mastra/duckdb";
-import { MastraCompositeStore } from '@mastra/core/storage';
-import { Observability, MastraStorageExporter, MastraPlatformExporter, SensitiveDataFilter } from '@mastra/observability';
-import { weatherWorkflow } from './workflows/weather-workflow';
-import { weatherAgent } from './agents/weather-agent';
-import { toolCallAppropriatenessScorer, completenessScorer, translationScorer } from './scorers/weather-scorer';
-
-export const mastra = new Mastra({
-  workflows: { weatherWorkflow },
-  agents: { weatherAgent },
-  scorers: { toolCallAppropriatenessScorer, completenessScorer, translationScorer },
-  storage: new MastraCompositeStore({
-    id: 'composite-storage',
-    default: new LibSQLStore({
-      id: "mastra-storage",
-      url: "file:./mastra.db",
-    }),
-    domains: {
-      observability: await new DuckDBStore().getStore('observability'),
-    }
-  }),
-  logger: new PinoLogger({
-    name: 'Mastra',
-    level: 'info',
-  }),
-  observability: new Observability({
-    configs: {
-      default: {
-        serviceName: 'mastra',
-        exporters: [
-          new MastraStorageExporter(), // Persists observability events to Mastra Storage
-          new MastraPlatformExporter(), // Sends observability events to Mastra Platform (if MASTRA_PLATFORM_ACCESS_TOKEN is set)
-        ],
-        spanOutputProcessors: [
-          new SensitiveDataFilter(), // Redacts sensitive data like passwords, tokens, keys
-        ],
-      },
-    },
-  }),
+// PostgreSQL Storage
+const pgStore = new PostgresStore({
+  id: "mastra-storage",
+  connectionString: config.database.url,
 });
+
+// PostgreSQL Vector Store (for semantic recall)
+const pgVector = new PgVector({
+  id: "mastra-vector",
+  connectionString: config.database.url,
+});
+
+// Embedder (OpenAI embeddings for semantic recall)
+const embedder = new ModelRouterEmbeddingModel({
+  id: "openai/text-embedding-3-small",
+  apiKey: config.mastra.openaiApiKey,
+});
+
+// Memory System - 4 Layers Built-In
+export const memory = new Memory({
+  storage: pgStore,
+  vector: pgVector,
+  embedder: embedder,
+  options: {
+    // Layer 1: Message History
+    lastMessages: 10,
+
+    // Layer 2: Observational Memory
+    observationalMemory: true,
+
+    // Layer 3: Working Memory
+    workingMemory: {
+      enabled: true,
+      template: `# User Context
+- Name:
+- Preferences:
+- Current Task:
+- Domain Knowledge:`,
+    },
+
+    // Layer 4: Semantic Recall
+    semanticRecall: true,
+  },
+});
+
+// Mastra Instance
+export const mastra = new Mastra({
+  storage: pgStore,
+});
+
+console.log("✓ Mastra initialized with PostgreSQL + Memory system");
