@@ -4,10 +4,11 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "dev": "mastra dev",
-    "build": "mastra build",
-    "start": "mastra start"
+    "dev": "tsx watch src/app.ts",
+    "build": "tsc",
+    "type-check": "tsc --noEmit",
+    "start": "node dist/app.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
   "author": "",
@@ -31,8 +32,12 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
     "@types/node": "^26.1.0",
+    "@types/pg": "^8.20.0",
     "mastra": "^1.18.0",
+    "tsx": "^4.23.0",
     "typescript": "^6.0.3"
   }
 }
