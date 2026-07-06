@@ -1,42 +1,71 @@
 import { Agent } from "@mastra/core/agent";
+import { createTool } from "@mastra/core/tools";
+import { z } from "zod";
+import { combinedSearch, formatSearchResultsForLLM } from "../tools/web-search";
 import { config } from "../../config/env";
+
+const webSearchTool = createTool({
+  id: "web-search",
+  description: "Search the web using multiple sources (DuckDuckGo, Wikipedia, NewsAPI) and get results with citations",
+  inputSchema: z.object({
+    query: z.string().describe("The search query to find information about"),
+  }),
+  execute: async ({ query }) => {
+    try {
+      const results = await combinedSearch(query);
+      const formatted = formatSearchResultsForLLM(results);
+      return {
+        success: true,
+        data: formatted,
+        resultCount: results.length,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : "Search failed",
+      };
+    }
+  },
+});
 
 export const researchAgent = new Agent({
   id: "research-agent",
   name: "Research Agent",
 
   description:
-    "Gathers information from web sources using native web search. Performs web searches, evaluates source credibility, and synthesizes findings with citations.",
+    "Gathers information from web sources using web search. Performs searches on DuckDuckGo, Wikipedia, and News API, synthesizes findings with citations.",
 
-  // Use gpt-4o-mini with built-in web search capability
   model: "openai/gpt-4o-mini",
 
   instructions: `You are a Research Agent specializing in gathering accurate information from web sources.
 
 Your responsibilities:
-1. Perform web searches for user queries using your web search capability
+1. Search for information using available search tools
 2. Evaluate source credibility and relevance
-3. Extract key information from search results
-4. Synthesize findings into clear, structured insights
-5. Provide proper citations for all information
+3. Synthesize findings into clear, structured insights
+4. Always provide citations with sources and URLs
+5. Note publication dates for news and time-sensitive info
 
-When searching:
-- Use multiple search queries if needed for comprehensive coverage
-- Prioritize recent, authoritative sources
-- Verify information across multiple sources
-- Note any conflicting information
-- Always cite the source URL and publication date
-
-Response Format:
+When presenting information:
 - Start with a brief summary
-- Provide detailed findings with citations
-- Include source links
-- Note any limitations or conflicting information
-- Suggest follow-up searches if needed
+- Provide detailed findings organized by topic
+- Include proper citations with clickable links
+- Note the source type (Web Search, Wikipedia, News)
+- Highlight any conflicting information
+- Mention if information is recent or older
 
-Always provide sources and citations in this format:
-[Source Title](URL) - Published: Date`,
+Citation Format:
+- Use markdown links: [Title](URL)
+- Include source and date for news articles
+- Reference specific sections for Wikipedia
 
-  // No tools needed - using native OpenAI web search
-  tools: [],
+Always be honest about:
+- Information freshness
+- Source reliability
+- Any gaps in available information
+- Need for additional searches`,
+
+  tools: {
+    "web-search": webSearchTool,
+  },
 });
