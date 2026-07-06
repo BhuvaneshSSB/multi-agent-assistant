@@ -2,12 +2,18 @@ import { Express, Request, Response } from "express";
 import multer from "multer";
 import { handleChat } from "./chat";
 import { handleChunkTest, handleFormatAwareChunkTest, handleMetadataTest, handleParseTest } from "./test";
+import { 
+  handleUploadDocument, 
+  handleQueryDocument, 
+  handleGetDocument 
+} from "./documents";
+
 
 const upload = multer({ storage: multer.memoryStorage() });
 
 export function setupRoutes(app: Express) {
-  // Chat endpoint
-  app.post("/api/chat", handleChat);
+  // Chat endpoint (file attachment is optional — multer passes through when absent)
+  app.post("/api/chat", upload.single("file"), handleChat);
 
   /**
    * @openapi
@@ -90,7 +96,7 @@ export function setupRoutes(app: Express) {
    *                 format: binary
    *               format:
    *                 type: string
-   *                 enum: [pdf, docx, xlsx, pptx]
+   *                 enum: [pdf, docx, xlsx, pptx, csv]
    *     responses:
    *       200:
    *         description: Parsed document result
@@ -227,7 +233,7 @@ export function setupRoutes(app: Express) {
    *               fileType:
    *                 type: string
    *                 description: Source document format
-   *                 enum: [pdf, docx, xlsx, pptx]
+   *                 enum: [pdf, docx, xlsx, pptx, csv]
    *                 default: pdf
    *               documentId:
    *                 type: string
@@ -303,7 +309,7 @@ export function setupRoutes(app: Express) {
    *               format:
    *                 type: string
    *                 description: Source document format, determines chunking strategy
-   *                 enum: [pdf, docx, xlsx, pptx]
+   *                 enum: [pdf, docx, xlsx, pptx, csv]
    *               documentId:
    *                 type: string
    *                 description: Optional document ID to attach to chunk metadata
@@ -361,6 +367,11 @@ export function setupRoutes(app: Express) {
    *               $ref: "#/components/schemas/Error"
    */
   app.post("/api/test/chunk-format-aware", handleFormatAwareChunkTest);
+
+  
+  app.post("/api/documents/upload", upload.single("file"), handleUploadDocument);
+  app.post("/api/documents/:documentId/query", handleQueryDocument);
+  app.get("/api/documents/:documentId", handleGetDocument);
 
   app.get("/api/agents", (req: Request, res: Response) => {
     res.json({

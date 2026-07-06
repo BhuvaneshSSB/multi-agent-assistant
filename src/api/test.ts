@@ -18,8 +18,8 @@ export async function handleParseTest(
       throw new ValidationError("file is required (multipart upload)");
     }
 
-    if (!format || !["pdf", "docx", "xlsx", "pptx"].includes(format)) {
-      throw new ValidationError("format is required (pdf, docx, xlsx, or pptx)");
+    if (!format || !["pdf", "docx", "xlsx", "pptx", "csv"].includes(format)) {
+      throw new ValidationError("format is required (pdf, docx, xlsx, pptx, or csv)");
     }
 
     console.log(`[Test] Parsing ${format} document...`);
@@ -130,7 +130,7 @@ export async function handleFormatAwareChunkTest(
       throw new ValidationError("text and format are required");
     }
 
-    const validFormats = ["pdf", "docx", "xlsx", "pptx"];
+    const validFormats = ["pdf", "docx", "xlsx", "pptx", "csv"];
     if (!validFormats.includes(format)) {
       throw new ValidationError(`format must be one of: ${validFormats.join(", ")}`);
     }

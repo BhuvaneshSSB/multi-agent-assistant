@@ -368,6 +368,11 @@ export async function chunkDocumentFormatAware(
         chunks = await tableAwareChunk(text, config);
         break;
 
+      case "csv":
+        logger.info("[Chunking] CSV detected - using table-aware strategy");
+        chunks = await tableAwareChunk(text, config);
+        break;
+
       case "pptx":
         logger.info("[Chunking] PowerPoint detected - using slide-based strategy");
         chunks = await slideBasedChunk(text, config);
@@ -457,7 +462,7 @@ export const formatAwareChunkingTool = {
       },
       format: {
         type: "string",
-        enum: ["pdf", "docx", "xlsx", "pptx"],
+        enum: ["pdf", "docx", "xlsx", "pptx", "csv"],
         description: "Document format",
       },
       documentId: {

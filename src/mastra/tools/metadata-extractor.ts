@@ -165,6 +165,40 @@ export function extractExcelMetadata(
 }
 
 // ============================================================================
+// CSV METADATA EXTRACTOR
+// ============================================================================
+
+export function extractCSVMetadata(
+  text: string,
+  documentId: string,
+  filename: string
+): DocumentMetadata {
+  try {
+    logger.info("[Metadata] Extracting CSV metadata");
+
+    const title = filename.replace(/\.csv$/i, "");
+    const wordCount = text.split(/\s+/).length;
+
+    const metadata: DocumentMetadata = {
+      documentId,
+      filename,
+      fileType: "csv",
+      title,
+      wordCount,
+      uploadedAt: new Date(),
+      userId: "",
+      conversationId: "",
+    };
+
+    logger.info("[Metadata] CSV metadata extracted", { title });
+    return metadata;
+  } catch (error) {
+    logger.error("[Metadata] Error extracting CSV metadata", { error });
+    throw error;
+  }
+}
+
+// ============================================================================
 // POWERPOINT METADATA EXTRACTOR
 // ============================================================================
 
@@ -369,6 +403,9 @@ export function extractAllMetadata(
       case "xlsx":
         documentMetadata = extractExcelMetadata(text, documentId, filename, additionalInfo?.sheets);
         break;
+      case "csv":
+        documentMetadata = extractCSVMetadata(text, documentId, filename);
+        break;
       case "pptx":
         documentMetadata = extractPowerPointMetadata(
           text,
@@ -430,7 +467,7 @@ export const metadataExtractorTool = {
       },
       fileType: {
         type: "string",
-        enum: ["pdf", "docx", "xlsx", "pptx"],
+        enum: ["pdf", "docx", "xlsx", "pptx", "csv"],
         description: "Document format",
       },
       documentId: {

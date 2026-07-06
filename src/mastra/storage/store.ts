@@ -4,6 +4,7 @@ import {
   Conversation,
   Observation,
   DocumentChunk,
+  DocumentFormat,
   DatabaseError,
 } from "../../types/index";
 
@@ -20,7 +21,7 @@ export class Store {
     conversationId: string,
     userId: string,
     filename: string,
-    fileType: "pdf" | "docx" | "xlsx" | "pptx",
+    fileType: DocumentFormat,
     fileSizeBytes: number,
     metadata?: Record<string, any>
   ): Promise<string> {

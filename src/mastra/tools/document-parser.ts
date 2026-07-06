@@ -116,6 +116,53 @@ export async function parseExcel(buffer: Buffer): Promise<string> {
 }
 
 // ============================================================================
+// CSV PARSER
+// ============================================================================
+
+export async function parseCSV(buffer: Buffer): Promise<string> {
+  try {
+    console.log("[CSV Parser] Parsing CSV file...");
+
+    // XLSX.read auto-detects plain-delimited text and produces a single-sheet
+    // workbook, so CSV reuses the same sheet_to_json path as parseExcel and
+    // emits the same "## Sheet:" / "Columns:" markers tableAwareChunk expects.
+    const workbook = XLSX.read(buffer, { type: "buffer" });
+    const sheetName = workbook.SheetNames[0] ?? "Sheet1";
+    const worksheet = workbook.Sheets[sheetName];
+    const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(worksheet);
+
+    let text = `CSV File\n\n`;
+    text += "---\n\n";
+    text += `## Sheet: ${sheetName}\n\n`;
+
+    if (rows.length > 0) {
+      const headers = Object.keys(rows[0]);
+      text += `Columns: ${headers.join(", ")}\n\n`;
+
+      for (let i = 0; i < Math.min(rows.length, 100); i++) {
+        const row = rows[i];
+        text += `Row ${i + 1}: `;
+        text += Object.entries(row)
+          .map(([key, value]) => `${key}: ${value}`)
+          .join(" | ");
+        text += "\n";
+      }
+
+      if (rows.length > 100) {
+        text += `\n... and ${rows.length - 100} more rows\n`;
+      }
+    }
+
+    text += "\n---\n\n";
+
+    console.log(`[CSV Parser] Extracted ${rows.length} rows`);
+    return text;
+  } catch (error) {
+    throw new Error(`CSV parsing failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+// ============================================================================
 // POWERPOINT (.pptx) PARSER
 // ============================================================================
 
@@ -183,6 +230,9 @@ export async function parseDocument(
     case "pptx":
       return parsePowerPoint(buffer);
 
+    case "csv":
+      return parseCSV(buffer);
+
     default:
       throw new Error(`Unsupported document format: ${format}`);
   }
@@ -194,7 +244,7 @@ export async function parseDocument(
 
 export const documentParserTool = {
   id: "parse-document",
-  description: "Parse a document and extract text (supports PDF, Word, Excel, PowerPoint)",
+  description: "Parse a document and extract text (supports PDF, Word, Excel, PowerPoint, CSV)",
   inputSchema: {
     type: "object" as const,
     properties: {
@@ -204,7 +254,7 @@ export const documentParserTool = {
       },
       format: {
         type: "string",
-        enum: ["pdf", "docx", "xlsx", "pptx"],
+        enum: ["pdf", "docx", "xlsx", "pptx", "csv"],
         description: "Document format",
       },
     },

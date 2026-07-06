@@ -27,7 +27,7 @@ export interface Message {
 // DOCUMENT TYPES
 // ============================================================================
 
-export type DocumentFormat = "pdf" | "docx" | "xlsx" | "pptx";
+export type DocumentFormat = "pdf" | "docx" | "xlsx" | "pptx" | "csv";
 export type DocumentStatus =
   | "pending"
   | "processing"
