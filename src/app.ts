@@ -12,7 +12,8 @@ const app: Express = express();
 const PORT = config.api.port;
 
 // Middleware
-app.use(express.json());
+app.use(express.json({ limit: "20mb" }));
+app.use(express.urlencoded({ extended: true, limit: "20mb" }));
 app.use(cors());
 
 // Request logging middleware

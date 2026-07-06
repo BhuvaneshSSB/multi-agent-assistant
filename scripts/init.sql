@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS documents (
   user_id UUID NOT NULL,
   
   filename VARCHAR(255) NOT NULL,
-  file_type VARCHAR(20) NOT NULL CHECK (file_type IN ('pdf', 'docx', 'xlsx', 'pptx')),
+  file_type VARCHAR(20) NOT NULL CHECK (file_type IN ('pdf', 'docx', 'xlsx', 'pptx', 'csv')),
   file_size_bytes BIGINT NOT NULL,
   
   status VARCHAR(50) NOT NULL DEFAULT 'pending' 
