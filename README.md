@@ -19,50 +19,51 @@ A general-purpose AI assistant built on [Mastra](https://mastra.ai) that can res
 A single Express API endpoint (`POST /api/chat`) fronts a **Supervisor Agent** that delegates to three specialist agents. The supervisor never writes content or answers document questions itself — it routes and synthesizes.
 
 ```
-                        ┌─────────────────────┐
+                        ┌──────────────────────┐
    Streamlit UI  ─────► │   POST /api/chat     │
   (or any client)       └──────────┬───────────┘
                                     │
-                     ┌──────────────────────────────┐
-                     │ 1. File attached?             │
-                     │    → run ingestion workflow   │
-                     │      unconditionally           │
-                     │ 2. Message present?            │
-                     │    → run retrieval-gate search │
-                     │      against this conversation's│
-                     │      documents (hybrid search)  │
-                     │      and tell the supervisor    │
-                     │      what it found              │
-                     └──────────────┬───────────────┘
-                                    │
-                                    ▼
-                     ┌───────────────────────────┐
-                     │      Supervisor Agent       │
-                     │  (routes on intent + the     │
-                     │   retrieval-gate verdict)     │
-                     └───┬───────────┬───────────┬──┘
-                         │           │           │
-              ┌──────────▼──┐ ┌──────▼──────┐ ┌──▼───────────┐
-              │  Research    │ │  Document   │ │   Writer      │
-              │  Agent       │ │  Agent      │ │   Agent       │
-              │ (web search) │ │ (RAG)       │ │ (skills)      │
-              └──────────────┘ └──────┬──────┘ └───────────────┘
-                                       │
-                              ┌────────▼─────────┐
-                              │ Document Ingestion │
-                              │ Workflow           │
-                              │ parse → metadata →  │
-                              │ chunk → embed →     │
-                              │ store               │
-                              └────────┬───────────┘
-                                       │
-                    ┌──────────────────▼──────────────────┐
-                    │           PostgreSQL + pgvector        │
-                    │  · conversation/message history        │
+                     ┌─────────────────────────────────┐
+                     │ Plain code, no LLM involved:    │
+                     │ 1. File attached?               │
+                     │    → parse → chunk → embed →    │
+                     │      store, unconditionally     │
+                     │      (Document Ingestion        │
+                     │      Workflow)                  │
+                     │ 2. Message present?             │
+                     │    → hybrid search (vector +    │
+                     │      keyword) against this      │
+                     │      conversation's documents,  │
+                     │      tell the supervisor what   │
+                     │      it found                   │
+                     └───┬───────────────────────────┬─┘
+                         │ writes                    │ reads
+                         ▼                           ▼
+                    ┌─────────────────────────────────────────┐
+                    │           PostgreSQL + pgvector         │
+                    │  · conversation/message history         │
                     │  · working memory / observations        │
                     │  · vector + full-text chunk index       │
                     └─────────────────────────────────────────┘
+                         ▲
+                         │ verdict injected as [System: ...] note
+                         │
+                     ┌───┴──────────────────────────┐
+                     │      Supervisor Agent        │
+                     │  (routes on intent + the     │
+                     │   retrieval-gate verdict)    │
+                     └───┬───────────┬───────────┬──┘
+                         │           │           │
+              ┌──────────▼───┐ ┌─────▼───────┐ ┌─▼─────────────┐
+              │  Research    │ │  Document   │ │   Writer      │
+              │  Agent       │ │  Agent      │ │   Agent       │
+              │ (web search) │ │ (answers    │ │ (skills)      │
+              │              │ │ from chunks │ │               │
+              │              │ │ it's given) │ │               │
+              └──────────────┘ └─────────────┘ └───────────────┘
 ```
+
+Ingestion and retrieval both write to / read from Postgres directly in the API layer — the Document Agent doesn't perform either in this flow. It's delegated to only to *generate the cited answer* from chunks the gate already found (see [DESIGN_DECISIONS.md](./DESIGN_DECISIONS.md) for where the Document Agent's own `search-document`/`ingest-document` tools are still used independently, outside this path).
 
 ### Why a retrieval-gate instead of letting the supervisor guess
 
