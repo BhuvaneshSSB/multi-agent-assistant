@@ -4,7 +4,7 @@ import swaggerUi from "swagger-ui-express";
 import { config } from "./config/env";
 import { initializeDatabase, testDatabaseConnection } from "./config/database";
 import { swaggerSpec } from "./config/swagger";
-import { mastra } from "./mastra/index";
+import "./mastra/index";
 import { setupRoutes } from "./api/index";
 import { AppError } from "./types/index";
 

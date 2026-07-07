@@ -111,20 +111,12 @@ export async function handleUploadDocument(
     }
 
     const format = ext as DocumentFormat;
-    const documentId = uuidv4();
-
-    logger.info("[API] Document upload started", {
-      filename,
-      format,
-      documentId,
-      userId,
-    });
 
     // Store document metadata in database
     const store = getStore();
     const fileBuffer = uploadedFile.buffer;
 
-    await store.saveDocument(
+    const documentId = await store.saveDocument(
       conversationId,
       userId,
       filename,
@@ -135,38 +127,55 @@ export async function handleUploadDocument(
       }
     );
 
-    logger.info("[API] Document metadata saved", { documentId });
+    logger.info("[API] Document upload started", {
+      filename,
+      format,
+      documentId,
+      userId,
+    });
 
     // Run the ingestion pipeline: parse → metadata → chunk → embed → store
     const startTime = Date.now();
 
-    const ingestionResult = await executeDocumentIngestion(
-      fileBuffer,
-      filename,
-      format,
-      userId,
-      conversationId,
-      documentId
-    );
+    try {
+      const ingestionResult = await executeDocumentIngestion(
+        fileBuffer,
+        filename,
+        format,
+        userId,
+        conversationId,
+        documentId
+      );
 
-    const executionTime = Date.now() - startTime;
+      const executionTime = Date.now() - startTime;
 
-    logger.info("[API] Document ingestion completed", {
-      documentId,
-      executionTimeMs: executionTime,
-    });
+      logger.info("[API] Document ingestion completed", {
+        documentId,
+        executionTimeMs: executionTime,
+      });
 
-    res.status(200).json({
-      success: true,
-      documentId,
-      filename,
-      format,
-      conversationId,
-      userId,
-      uploadedAt: new Date().toISOString(),
-      executionTimeMs: executionTime,
-      ingestion: ingestionResult,
-    });
+      res.status(200).json({
+        success: true,
+        documentId,
+        filename,
+        format,
+        conversationId,
+        userId,
+        uploadedAt: new Date().toISOString(),
+        executionTimeMs: executionTime,
+        ingestion: ingestionResult,
+      });
+    } catch (ingestionError) {
+      await store.updateDocumentStatus(
+        documentId,
+        "failed",
+        undefined,
+        ingestionError instanceof Error
+          ? ingestionError.message
+          : String(ingestionError)
+      );
+      throw ingestionError;
+    }
   } catch (error) {
     logger.error("[API] Upload document failed", error);
     next(error);

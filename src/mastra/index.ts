@@ -7,6 +7,8 @@ import { researchAgent } from "./agents/research";
 import { documentAgent } from "./agents/document";
 import { writerAgent } from "./agents/writer";
 
+import { allWritingSkills } from "./skills/writing-skills";
+
 import { documentIngestionWorkflow } from "./workflows/document-ingestion";
 // Mastra Instance
 export const mastra = new Mastra({
@@ -18,8 +20,6 @@ export const mastra = new Mastra({
       default: {
         serviceName: "multi-agent-assistant",
         exporters: [new ConsoleExporter({ logLevel: "debug" }), new MastraStorageExporter()],
-        // Scoped to the Document Agent for now; widen once verified.
-        spanFilter: (span) => span.entityId === documentAgent.id,
       },
     },
   }),
@@ -28,5 +28,7 @@ export const mastra = new Mastra({
 export { supervisorAgent, researchAgent, documentAgent, writerAgent, memory };
 
 export { documentIngestionWorkflow };
+
+export { allWritingSkills };
 
 console.log("✓ Mastra initialized with PostgreSQL + Memory system");

@@ -64,8 +64,10 @@ const parseDocumentStep = createStep({
     conversationId: z.string(),
     filename: z.string(),
     format: documentFormatSchema,
+    durationMs: z.number(),
   }),
   execute: async ({ inputData }) => {
+    const stepStart = Date.now();
     try {
       logger.info("[Workflow] Step 1: Parsing document", {
         filename: inputData.filename,
@@ -73,10 +75,12 @@ const parseDocumentStep = createStep({
       });
 
       const text = await parseDocument(inputData.fileBuffer, inputData.format);
+      const durationMs = Date.now() - stepStart;
 
       logger.info("[Workflow] Step 1 completed: Document parsed", {
         textLength: text.length,
         documentId: inputData.documentId,
+        durationMs,
       });
 
       return {
@@ -85,6 +89,7 @@ const parseDocumentStep = createStep({
         conversationId: inputData.conversationId,
         filename: inputData.filename,
         format: inputData.format,
+        durationMs,
       };
     } catch (error) {
       logger.error("[Workflow] Step 1 failed: Document parsing", error);
@@ -118,8 +123,10 @@ const extractMetadataStep = createStep({
     wordCount: z.number().optional(),
     pageBreaks: z.array(z.number()),
     hierarchy: z.array(z.string()),
+    durationMs: z.number(),
   }),
   execute: async ({ inputData }) => {
+    const stepStart = Date.now();
     try {
       logger.info("[Workflow] Step 2: Extracting metadata", {
         filename: inputData.filename,
@@ -132,11 +139,13 @@ const extractMetadataStep = createStep({
         inputData.filename,
         inputData.format
       );
+      const durationMs = Date.now() - stepStart;
 
       logger.info("[Workflow] Step 2 completed: Metadata extracted", {
         title: metadataResult.documentMetadata.title,
         pages: metadataResult.pageBreaks.length,
         sections: metadataResult.hierarchy.length,
+        durationMs,
       });
 
       return {
@@ -150,6 +159,7 @@ const extractMetadataStep = createStep({
         wordCount: metadataResult.documentMetadata.wordCount,
         pageBreaks: metadataResult.pageBreaks,
         hierarchy: metadataResult.hierarchy,
+        durationMs,
       };
     } catch (error) {
       logger.error("[Workflow] Step 2 failed: Metadata extraction", error);
@@ -177,8 +187,10 @@ const chunkDocumentStep = createStep({
     conversationId: z.string(),
     totalChunks: z.number(),
     avgChunkSize: z.number(),
+    durationMs: z.number(),
   }),
   execute: async ({ inputData }) => {
+    const stepStart = Date.now();
     try {
       logger.info("[Workflow] Step 3: Chunking document", {
         format: inputData.format,
@@ -192,10 +204,12 @@ const chunkDocumentStep = createStep({
       );
 
       const stats = getChunkStats(chunks);
+      const durationMs = Date.now() - stepStart;
 
       logger.info("[Workflow] Step 3 completed: Document chunked", {
         totalChunks: stats.totalChunks,
         avgChunkSize: stats.avgChunkSize,
+        durationMs,
       });
 
       return {
@@ -204,6 +218,7 @@ const chunkDocumentStep = createStep({
         conversationId: inputData.conversationId,
         totalChunks: stats.totalChunks,
         avgChunkSize: stats.avgChunkSize,
+        durationMs,
       };
     } catch (error) {
       logger.error("[Workflow] Step 3 failed: Document chunking", error);
@@ -229,24 +244,42 @@ const generateEmbeddingsStep = createStep({
     documentId: z.string(),
     totalChunks: z.number(),
     embeddingsGenerated: z.number(),
+    durationMs: z.number(),
+    embedMs: z.number(),
+    indexEnsureMs: z.number(),
+    upsertMs: z.number(),
   }),
   execute: async ({ inputData }) => {
+    const stepStart = Date.now();
     try {
       logger.info("[Workflow] Step 4: Generating embeddings", {
         chunkCount: inputData.chunks.length,
       });
 
       // Note: embedAndStoreChunks both generates AND stores
-      await embedAndStoreChunks(inputData.chunks, inputData.documentId, inputData.conversationId);
+      const { embedMs, indexEnsureMs, upsertMs } = await embedAndStoreChunks(
+        inputData.chunks,
+        inputData.documentId,
+        inputData.conversationId
+      );
+      const durationMs = Date.now() - stepStart;
 
       logger.info("[Workflow] Step 4 completed: Embeddings generated and stored", {
         embeddingsGenerated: inputData.chunks.length,
+        durationMs,
+        embedMs,
+        indexEnsureMs,
+        upsertMs,
       });
 
       return {
         documentId: inputData.documentId,
         totalChunks: inputData.totalChunks,
         embeddingsGenerated: inputData.chunks.length,
+        durationMs,
+        embedMs,
+        indexEnsureMs,
+        upsertMs,
       };
     } catch (error) {
       logger.error("[Workflow] Step 4 failed: Embedding generation", error);
@@ -294,6 +327,31 @@ const updateStatusStep = createStep({
         documentId: inputData.documentId,
         status: "completed",
         totalChunks: inputData.totalChunks,
+      });
+
+      // Consolidated per-stage timing breakdown, pulled from every prior
+      // step's own recorded durationMs via getStepResult (each step already
+      // measured itself — this just aggregates them into one summary line
+      // instead of requiring someone to piece it together from separate logs).
+      const parseResult = getStepResult(parseDocumentStep);
+      const metadataResult = getStepResult(extractMetadataStep);
+      const chunkResult = getStepResult(chunkDocumentStep);
+      const embedResult = getStepResult(generateEmbeddingsStep);
+
+      logger.info("[Workflow] Ingestion stage timings", {
+        documentId: inputData.documentId,
+        parseMs: parseResult.durationMs,
+        metadataMs: metadataResult.durationMs,
+        chunkMs: chunkResult.durationMs,
+        embedAndStoreMs: embedResult.durationMs,
+        embedOnlyMs: embedResult.embedMs,
+        indexEnsureMs: embedResult.indexEnsureMs,
+        vectorUpsertMs: embedResult.upsertMs,
+        stagesTotalMs:
+          parseResult.durationMs +
+          metadataResult.durationMs +
+          chunkResult.durationMs +
+          embedResult.durationMs,
       });
 
       return {

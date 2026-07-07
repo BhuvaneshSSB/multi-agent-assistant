@@ -1,8 +1,7 @@
 import { Request, Response, NextFunction } from "express";
-import { v4 as uuidv4 } from "uuid";
 import { supervisorAgent } from "../mastra/agents/supervisor";
 import { executeDocumentIngestion } from "../mastra/workflows/document-ingestion";
-import { searchSimilarChunks } from "../mastra/tools/embeddings";
+import { hybridSearchChunks } from "../mastra/tools/embeddings";
 import { getStore } from "../mastra/storage/store";
 import { ValidationError, DocumentFormat } from "../types/index";
 import { logger } from "../utils/logger";
@@ -150,16 +149,9 @@ export async function handleChat(
       }
 
       const format = ext as DocumentFormat;
-      const documentId = uuidv4();
-
-      logger.info("[Chat] Document attached, ingesting", {
-        filename,
-        format,
-        documentId,
-      });
 
       const store = getStore();
-      await store.saveDocument(
+      const documentId = await store.saveDocument(
         conversationId,
         userId,
         filename,
@@ -168,24 +160,42 @@ export async function handleChat(
         { uploadedAt: new Date().toISOString() }
       );
 
-      const ingestionResult = await executeDocumentIngestion(
-        uploadedFile.buffer,
+      logger.info("[Chat] Document attached, ingesting", {
         filename,
         format,
-        userId,
-        conversationId,
-        documentId
-      );
+        documentId,
+      });
 
-      documentResult = {
-        documentId: ingestionResult.documentId,
-        filename: ingestionResult.filename,
-        totalChunks: ingestionResult.totalChunks,
-        embeddingsGenerated: ingestionResult.embeddingsGenerated,
-        status: ingestionResult.status,
-      };
+      try {
+        const ingestionResult = await executeDocumentIngestion(
+          uploadedFile.buffer,
+          filename,
+          format,
+          userId,
+          conversationId,
+          documentId
+        );
 
-      logger.info("[Chat] Document ingestion completed", documentResult);
+        documentResult = {
+          documentId: ingestionResult.documentId,
+          filename: ingestionResult.filename,
+          totalChunks: ingestionResult.totalChunks,
+          embeddingsGenerated: ingestionResult.embeddingsGenerated,
+          status: ingestionResult.status,
+        };
+
+        logger.info("[Chat] Document ingestion completed", documentResult);
+      } catch (ingestionError) {
+        await store.updateDocumentStatus(
+          documentId,
+          "failed",
+          undefined,
+          ingestionError instanceof Error
+            ? ingestionError.message
+            : String(ingestionError)
+        );
+        throw ingestionError;
+      }
     }
 
     // ------------------------------------------------------------------
@@ -199,11 +209,11 @@ export async function handleChat(
 
     if (ranQuery) {
       try {
-        const results = await searchSimilarChunks(
+        const results = await hybridSearchChunks(
           message,
           RETRIEVAL_TOP_K,
-          RETRIEVAL_THRESHOLD,
-          conversationId
+          conversationId,
+          RETRIEVAL_THRESHOLD
         );
         relevantChunksFound = results.length;
 
