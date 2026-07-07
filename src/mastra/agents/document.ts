@@ -6,6 +6,7 @@ import { searchSimilarChunks } from "../tools/embeddings";
 import { logger } from "../../utils/logger";
 import { DocumentFormat } from "../../types/index";
 import { memory } from "../memory";
+import { openAiModelWithFallback } from "../../config/models";
 
 // ============================================================================
 // TOOLS
@@ -137,7 +138,7 @@ export const documentAgent = new Agent({
   description:
     "Analyzes uploaded documents using RAG. Ingests documents via workflow, performs semantic search, and answers questions about document content with citations.",
 
-  model: "openai/gpt-4o-mini",
+  ...openAiModelWithFallback("openai/gpt-4o-mini", "anthropic/claude-haiku-4-5-20251001"),
 
   instructions: `You are a Document Analysis Agent specializing in RAG (Retrieval-Augmented Generation).
 

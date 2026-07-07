@@ -2,7 +2,7 @@ import { Agent } from "@mastra/core/agent";
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 import { combinedSearch, formatSearchResultsForLLM } from "../tools/web-search";
-import { config } from "../../config/env";
+import { openAiModelWithFallback } from "../../config/models";
 
 const webSearchTool = createTool({
   id: "web-search",
@@ -35,7 +35,7 @@ export const researchAgent = new Agent({
   description:
     "Gathers information from web sources using web search. Performs searches on DuckDuckGo, Wikipedia, and News API, synthesizes findings with citations.",
 
-  model: "openai/gpt-4o-mini",
+  ...openAiModelWithFallback("openai/gpt-4o-mini", "anthropic/claude-haiku-4-5-20251001"),
 
   instructions: `You are a Research Agent specializing in gathering accurate information from web sources.
 

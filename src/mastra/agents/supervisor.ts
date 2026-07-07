@@ -12,10 +12,21 @@ export const supervisorAgent = new Agent({
   description:
     "Orchestrates multiple specialized agents to handle complex user requests. Routes requests to appropriate agents and synthesizes results.",
   
-  model: config.mastra.openaiApiKey
-    ? "openai/gpt-5.4"
-    : "anthropic/claude-sonnet-5",
-  
+  // Cross-provider fallback only when both keys are actually configured —
+  // otherwise Mastra would just fail resolving a fallback provider that was
+  // never set up, which isn't real resilience. See src/config/models.ts for
+  // the same pattern used by the sub-agents.
+  model:
+    config.mastra.openaiApiKey && config.mastra.anthropicApiKey
+      ? [
+          { model: "openai/gpt-5.4", maxRetries: 2 },
+          { model: "anthropic/claude-sonnet-5", maxRetries: 1 },
+        ]
+      : config.mastra.openaiApiKey
+        ? "openai/gpt-5.4"
+        : "anthropic/claude-sonnet-5",
+  maxRetries: 2,
+
   instructions: `You are a Supervisor Agent coordinating a team of specialized agents.
 
 Your team:

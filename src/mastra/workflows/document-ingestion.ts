@@ -401,6 +401,12 @@ export const documentIngestionWorkflow = createWorkflow({
     embeddingsGenerated: z.number(),
     status: z.string(),
   }),
+  // Default for every step below (each already retries its own internal
+  // sub-calls where that makes sense, e.g. embedding batches — this is the
+  // outer safety net for a step failing outright due to a transient blip,
+  // like a momentary DB connection drop during index creation or status
+  // update). Steps can override via their own `retries` option.
+  retryConfig: { attempts: 2, delay: 1500 },
 })
   .then(parseDocumentStep)
   .then(extractMetadataStep)

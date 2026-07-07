@@ -1,5 +1,6 @@
 import axios from "axios";
 import { config } from "../../config/env";
+import { withRetry, isRetryableHttpError } from "../../utils/retry";
 
 // ============================================================================
 // DUCKDUCKGO SEARCH (General Web Search - No API Key Needed)
@@ -15,15 +16,19 @@ export async function searchDuckDuckGo(query: string): Promise<DuckDuckGoResult[
   try {
     console.log(`[DuckDuckGo] Searching: ${query}`);
 
-    const response = await axios.get("https://api.duckduckgo.com/", {
-      params: {
-        q: query,
-        format: "json",
-        no_redirect: 1,
-        no_html: 1,
-        skip_disambig: 1,
-      },
-    });
+    const response = await withRetry(
+      () =>
+        axios.get("https://api.duckduckgo.com/", {
+          params: {
+            q: query,
+            format: "json",
+            no_redirect: 1,
+            no_html: 1,
+            skip_disambig: 1,
+          },
+        }),
+      { maxRetries: 2, baseDelayMs: 500, maxDelayMs: 4000, isRetryable: isRetryableHttpError, label: "DuckDuckGo search" }
+    );
 
     const results: DuckDuckGoResult[] = [];
 
@@ -72,15 +77,19 @@ export async function searchWikipedia(query: string): Promise<WikipediaResult[]>
     console.log(`[Wikipedia] Searching: ${query}`);
 
     // Search Wikipedia
-    const searchResponse = await axios.get("https://en.wikipedia.org/w/api.php", {
-      params: {
-        action: "query",
-        list: "search",
-        srsearch: query,
-        format: "json",
-        srlimit: 5,
-      },
-    });
+    const searchResponse = await withRetry(
+      () =>
+        axios.get("https://en.wikipedia.org/w/api.php", {
+          params: {
+            action: "query",
+            list: "search",
+            srsearch: query,
+            format: "json",
+            srlimit: 5,
+          },
+        }),
+      { maxRetries: 2, baseDelayMs: 500, maxDelayMs: 4000, isRetryable: isRetryableHttpError, label: "Wikipedia search" }
+    );
 
     const results: WikipediaResult[] = [];
 
@@ -92,16 +101,20 @@ export async function searchWikipedia(query: string): Promise<WikipediaResult[]>
     // Get full content for each result
     for (const item of searchResponse.data.query.search.slice(0, 3)) {
       try {
-        const pageResponse = await axios.get("https://en.wikipedia.org/w/api.php", {
-          params: {
-            action: "query",
-            titles: item.title,
-            prop: "extracts",
-            explaintext: true,
-            format: "json",
-            exintro: true,
-          },
-        });
+        const pageResponse = await withRetry(
+          () =>
+            axios.get("https://en.wikipedia.org/w/api.php", {
+              params: {
+                action: "query",
+                titles: item.title,
+                prop: "extracts",
+                explaintext: true,
+                format: "json",
+                exintro: true,
+              },
+            }),
+          { maxRetries: 2, baseDelayMs: 500, maxDelayMs: 4000, isRetryable: isRetryableHttpError, label: `Wikipedia page fetch (${item.title})` }
+        );
 
         const pages = pageResponse.data.query.pages;
         const pageId = Object.keys(pages)[0];
@@ -151,15 +164,19 @@ export async function searchNews(query: string): Promise<NewsResult[]> {
 
     console.log(`[NewsAPI] Searching: ${query}`);
 
-    const response = await axios.get("https://newsapi.org/v2/everything", {
-      params: {
-        q: query,
-        sortBy: "publishedAt",
-        language: "en",
-        pageSize: 5,
-        apiKey: config.search.newsApiKey,
-      },
-    });
+    const response = await withRetry(
+      () =>
+        axios.get("https://newsapi.org/v2/everything", {
+          params: {
+            q: query,
+            sortBy: "publishedAt",
+            language: "en",
+            pageSize: 5,
+            apiKey: config.search.newsApiKey,
+          },
+        }),
+      { maxRetries: 2, baseDelayMs: 500, maxDelayMs: 4000, isRetryable: isRetryableHttpError, label: "NewsAPI search" }
+    );
 
     const results: NewsResult[] = [];
 

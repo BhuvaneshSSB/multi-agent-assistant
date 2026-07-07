@@ -1,0 +1,6 @@
+node_modules
+dist
+.mastra
+.git
+docs
+streamlit-frontend
