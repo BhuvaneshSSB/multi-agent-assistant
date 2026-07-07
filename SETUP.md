@@ -19,7 +19,7 @@ DATABASE_URL=postgresql://postgres:postgres@localhost:5432/multi_agent
 
 
 ANTHROPIC_API_KEY=sk-ant-...
-NEWS_API_KEY=...
+NEWS_API_KEY=87c346605ee14705afd188bf23daee27
 API_PORT=3000
 NODE_ENV=development
 ```
