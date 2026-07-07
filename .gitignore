@@ -11,3 +11,8 @@ dist
 *.duckdb
 *.duckdb.wal
 docs
+
+# Streamlit frontend
+streamlit-frontend/.venv
+streamlit-frontend/venv
+streamlit-frontend/__pycache__

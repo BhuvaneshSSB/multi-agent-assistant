@@ -52,7 +52,15 @@ const parseDocumentStep = createStep({
   id: "parse-document",
   description: "Extract text from uploaded document",
   inputSchema: z.object({
-    fileBuffer: z.instanceof(Buffer).describe("File buffer"),
+    // Base64 string, not a raw Buffer: Mastra persists this step's input as
+    // part of the workflow snapshot (via `storage: pgStore` in mastra/index.ts)
+    // on every step transition. Node's default JSON serialization of a Buffer
+    // is `{"type":"Buffer","data":[b0,b1,...]}` — one array element per byte —
+    // which for a multi-MB PDF balloons into tens of millions of characters
+    // and takes real wall-clock time to serialize and write to Postgres on
+    // every step. Base64 serializes as a single string at ~1.33x the raw
+    // size, avoiding the array-of-numbers blowup entirely.
+    fileBuffer: z.string().describe("Base64-encoded file content"),
     filename: z.string().describe("Original filename"),
     format: documentFormatSchema.describe("Document format"),
     documentId: z.string().describe("Document ID"),
@@ -74,7 +82,8 @@ const parseDocumentStep = createStep({
         format: inputData.format,
       });
 
-      const text = await parseDocument(inputData.fileBuffer, inputData.format);
+      const buffer = Buffer.from(inputData.fileBuffer, "base64");
+      const text = await parseDocument(buffer, inputData.format);
       const durationMs = Date.now() - stepStart;
 
       logger.info("[Workflow] Step 1 completed: Document parsed", {
@@ -377,7 +386,8 @@ export const documentIngestionWorkflow = createWorkflow({
   description:
     "End-to-end RAG document ingestion: parse → metadata → chunk → embed → store",
   inputSchema: z.object({
-    fileBuffer: z.instanceof(Buffer).describe("File buffer"),
+    // See parseDocumentStep's inputSchema for why this is base64, not Buffer.
+    fileBuffer: z.string().describe("Base64-encoded file content"),
     filename: z.string().describe("Original filename"),
     format: documentFormatSchema.describe("Document format"),
     documentId: z.string().describe("Unique document ID"),
@@ -423,7 +433,10 @@ export async function executeDocumentIngestion(
     const run = await documentIngestionWorkflow.createRun();
     const result = await run.start({
       inputData: {
-        fileBuffer,
+        // Encoded to base64 here so the raw Buffer never enters the
+        // workflow's persisted snapshot — see parseDocumentStep's
+        // inputSchema comment for why that matters.
+        fileBuffer: fileBuffer.toString("base64"),
         filename,
         format,
         documentId,
