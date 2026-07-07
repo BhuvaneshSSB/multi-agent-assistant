@@ -63,7 +63,13 @@ Always be honest about:
 - Information freshness
 - Source reliability
 - Any gaps in available information
-- Need for additional searches`,
+- Need for additional searches
+
+If repeated searches (including reworded queries) keep returning irrelevant or empty results,
+stop retrying and say so explicitly — e.g. "I searched for X but the available sources didn't
+return reliable, relevant results" — rather than giving up silently. Never end your turn with an
+empty or near-empty response; if you truly found nothing useful, that finding itself is the
+answer to report.`,
 
   tools: {
     "web-search": webSearchTool,

@@ -64,6 +64,13 @@ export async function parseWord(buffer: Buffer): Promise<string> {
   }
 }
 
+function formatCellValue(value: unknown): unknown {
+  if (value instanceof Date) {
+    return value.toISOString().split("T")[0];
+  }
+  return value;
+}
+
 // ============================================================================
 // EXCEL (.xlsx) PARSER
 // ============================================================================
@@ -72,7 +79,10 @@ export async function parseExcel(buffer: Buffer): Promise<string> {
   try {
     console.log("[Excel Parser] Parsing Excel file...");
 
-    const workbook = XLSX.read(buffer, { type: "buffer" });
+    // cellDates keeps date cells as real JS Date objects instead of raw
+    // Excel serial numbers (e.g. 45599.229...), which formatRowValue below
+    // then renders as a plain YYYY-MM-DD string.
+    const workbook = XLSX.read(buffer, { type: "buffer", cellDates: true });
 
     let text = `Excel File: ${workbook.Props?.Title || "Untitled"}\n`;
     text += `Sheets: ${workbook.SheetNames.join(", ")}\n\n`;
@@ -95,7 +105,7 @@ export async function parseExcel(buffer: Buffer): Promise<string> {
           const row = sheetData[i];
           text += `Row ${i + 1}: `;
           text += Object.entries(row)
-            .map(([key, value]) => `${key}: ${value}`)
+            .map(([key, value]) => `${key}: ${formatCellValue(value)}`)
             .join(" | ");
           text += "\n";
         }
@@ -126,7 +136,11 @@ export async function parseCSV(buffer: Buffer): Promise<string> {
     // XLSX.read auto-detects plain-delimited text and produces a single-sheet
     // workbook, so CSV reuses the same sheet_to_json path as parseExcel and
     // emits the same "## Sheet:" / "Columns:" markers tableAwareChunk expects.
-    const workbook = XLSX.read(buffer, { type: "buffer" });
+    // raw:true disables SheetJS's date-sniffing heuristic, which otherwise
+    // silently rewrites date-looking CSV strings (e.g. "2024-11-03") into
+    // Excel serial-date numbers — CSV cells have no real type, so the
+    // original text should pass through unchanged.
+    const workbook = XLSX.read(buffer, { type: "buffer", raw: true });
     const sheetName = workbook.SheetNames[0] ?? "Sheet1";
     const worksheet = workbook.Sheets[sheetName];
     const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(worksheet);
