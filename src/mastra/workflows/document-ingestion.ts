@@ -2,6 +2,7 @@ import { createWorkflow, createStep } from "@mastra/core/workflows";
 import { z } from "zod";
 import { logger } from "../../utils/logger";
 import { parseDocument } from "../tools/document-parser";
+import { extractAndCaptionImages } from "../tools/image-captioner";
 import { extractAllMetadata } from "../tools/metadata-extractor";
 import { chunkDocumentFormatAware, getChunkStats } from "../tools/chunking";
 import { embedAndStoreChunks } from "../tools/embeddings";
@@ -26,11 +27,17 @@ export interface DocumentIngestionOutput {
   filename: string;
   totalChunks: number;
   embeddingsGenerated: number;
+  imagesProcessed: number;
   status: DocumentStatus;
   executionTimeMs: number;
 }
 
 const documentFormatSchema = z.enum(["pdf", "docx", "xlsx", "pptx", "csv"]);
+
+const imageCaptionSchema = z.object({
+  pageNumber: z.number(),
+  caption: z.string(),
+});
 
 const chunkSchema = z.object({
   id: z.string(),
@@ -41,6 +48,7 @@ const chunkSchema = z.object({
     pageNumber: z.number().optional(),
     sectionTitle: z.string().optional(),
     sourceOffset: z.number(),
+    contentType: z.enum(["text", "image_caption"]).optional(),
   }),
 });
 
@@ -72,6 +80,7 @@ const parseDocumentStep = createStep({
     conversationId: z.string(),
     filename: z.string(),
     format: documentFormatSchema,
+    imageCaptions: z.array(imageCaptionSchema),
     durationMs: z.number(),
   }),
   execute: async ({ inputData }) => {
@@ -83,12 +92,18 @@ const parseDocumentStep = createStep({
       });
 
       const buffer = Buffer.from(inputData.fileBuffer, "base64");
-      const text = await parseDocument(buffer, inputData.format);
+      const [text, imageCaptions] = await Promise.all([
+        parseDocument(buffer, inputData.format),
+        inputData.format === "pdf"
+          ? extractAndCaptionImages(buffer, inputData.documentId)
+          : Promise.resolve([]),
+      ]);
       const durationMs = Date.now() - stepStart;
 
       logger.info("[Workflow] Step 1 completed: Document parsed", {
         textLength: text.length,
         documentId: inputData.documentId,
+        imagesFound: imageCaptions.length,
         durationMs,
       });
 
@@ -98,6 +113,7 @@ const parseDocumentStep = createStep({
         conversationId: inputData.conversationId,
         filename: inputData.filename,
         format: inputData.format,
+        imageCaptions,
         durationMs,
       };
     } catch (error) {
@@ -120,6 +136,7 @@ const extractMetadataStep = createStep({
     format: documentFormatSchema,
     documentId: z.string(),
     conversationId: z.string(),
+    imageCaptions: z.array(imageCaptionSchema),
   }),
   outputSchema: z.object({
     text: z.string(),
@@ -132,6 +149,7 @@ const extractMetadataStep = createStep({
     wordCount: z.number().optional(),
     pageBreaks: z.array(z.number()),
     hierarchy: z.array(z.string()),
+    imageCaptions: z.array(imageCaptionSchema),
     durationMs: z.number(),
   }),
   execute: async ({ inputData }) => {
@@ -168,6 +186,7 @@ const extractMetadataStep = createStep({
         wordCount: metadataResult.documentMetadata.wordCount,
         pageBreaks: metadataResult.pageBreaks,
         hierarchy: metadataResult.hierarchy,
+        imageCaptions: inputData.imageCaptions,
         durationMs,
       };
     } catch (error) {
@@ -189,6 +208,7 @@ const chunkDocumentStep = createStep({
     format: documentFormatSchema,
     documentId: z.string(),
     conversationId: z.string(),
+    imageCaptions: z.array(imageCaptionSchema),
   }),
   outputSchema: z.object({
     chunks: z.array(chunkSchema),
@@ -209,7 +229,9 @@ const chunkDocumentStep = createStep({
       const chunks = await chunkDocumentFormatAware(
         inputData.text,
         inputData.format,
-        inputData.documentId
+        inputData.documentId,
+        undefined,
+        inputData.imageCaptions
       );
 
       const stats = getChunkStats(chunks);
@@ -314,6 +336,7 @@ const updateStatusStep = createStep({
     filename: z.string(),
     totalChunks: z.number(),
     embeddingsGenerated: z.number(),
+    imagesProcessed: z.number(),
     status: z.string(),
   }),
   execute: async ({ inputData, getStepResult }) => {
@@ -330,7 +353,8 @@ const updateStatusStep = createStep({
         inputData.totalChunks
       );
 
-      const { filename } = getStepResult(parseDocumentStep);
+      const { filename, imageCaptions } = getStepResult(parseDocumentStep);
+      const imagesProcessed = imageCaptions.length;
 
       logger.info("[Workflow] Step 5 completed: Document status updated", {
         documentId: inputData.documentId,
@@ -356,6 +380,7 @@ const updateStatusStep = createStep({
         embedOnlyMs: embedResult.embedMs,
         indexEnsureMs: embedResult.indexEnsureMs,
         vectorUpsertMs: embedResult.upsertMs,
+        imagesProcessed,
         stagesTotalMs:
           parseResult.durationMs +
           metadataResult.durationMs +
@@ -368,6 +393,7 @@ const updateStatusStep = createStep({
         filename,
         totalChunks: inputData.totalChunks,
         embeddingsGenerated: inputData.embeddingsGenerated,
+        imagesProcessed,
         status: "completed",
       };
     } catch (error) {
@@ -399,6 +425,7 @@ export const documentIngestionWorkflow = createWorkflow({
     filename: z.string(),
     totalChunks: z.number(),
     embeddingsGenerated: z.number(),
+    imagesProcessed: z.number(),
     status: z.string(),
   }),
   // Default for every step below (each already retries its own internal
@@ -469,6 +496,7 @@ export async function executeDocumentIngestion(
       filename: result.result.filename,
       totalChunks: result.result.totalChunks,
       embeddingsGenerated: result.result.embeddingsGenerated,
+      imagesProcessed: result.result.imagesProcessed,
       status: result.result.status as DocumentStatus,
       executionTimeMs: executionTime,
     };

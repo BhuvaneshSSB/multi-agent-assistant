@@ -139,5 +139,4 @@ Four layers are active per conversation, all backed by Postgres/pgvector, scoped
 
 - Query expansion (§2.2, option B) and hybrid search (§2.2, option C) have not been benchmarked against each other on the same query set to determine whether they're complementary or redundant for the same near-miss cases.
 - No automated test suite — all RAG/memory verification was done via live manual requests against a running instance with real Postgres data (documented in `docs/` during development, not committed alongside this repo).
-- Observability tracing is currently scoped to the Document Agent only; Supervisor, Research, and Writer agent runs don't yet produce trace spans.
 - The `search-document` tool used by the Document Agent directly (outside the `/api/chat` retrieval-gate) still performs an unscoped, global vector search — only the gate's own retrieval call is scoped to the current conversation.

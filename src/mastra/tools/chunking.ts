@@ -2,6 +2,7 @@ import { MDocument } from "@mastra/rag";
 import { getEncoding } from "js-tiktoken";
 import { logger } from "../../utils/logger";
 import { DocumentFormat } from "../../types/index";
+import type { ImageCaption } from "./image-captioner";
 
 // cl100k_base matches OpenAI's text-embedding-3-small tokenizer. Loaded once
 // at module scope since building the encoding table is expensive.
@@ -59,7 +60,25 @@ export interface Chunk {
     pageNumber?: number;
     sectionTitle?: string;
     sourceOffset: number;
+    contentType?: "text" | "image_caption";
   };
+}
+
+// ============================================================================
+// IMAGE CAPTION CHUNKS (from extractAndCaptionImages, PDF only)
+// ============================================================================
+
+export function imageCaptionsToChunks(captions: ImageCaption[], startIndex: number): Chunk[] {
+  return captions.map((c, offset) => ({
+    id: `chunk-image-${startIndex + offset}`,
+    index: startIndex + offset,
+    content: `[Image, page ${c.pageNumber}] ${c.caption}`,
+    metadata: {
+      pageNumber: c.pageNumber,
+      sourceOffset: 0,
+      contentType: "image_caption" as const,
+    },
+  }));
 }
 
 // ============================================================================
@@ -357,7 +376,8 @@ export async function chunkDocumentFormatAware(
   text: string,
   format: DocumentFormat,
   documentId?: string,
-  config: ChunkingConfig = DEFAULT_CHUNKING_CONFIG
+  config: ChunkingConfig = DEFAULT_CHUNKING_CONFIG,
+  imageCaptions: ImageCaption[] = []
 ): Promise<Chunk[]> {
   try {
     logger.info("[Chunking] Starting format-aware chunking", {
@@ -396,6 +416,12 @@ export async function chunkDocumentFormatAware(
       default:
         logger.warn(`[Chunking] Unknown format: ${format}, using recursive fallback`);
         chunks = await recursiveChunk(text, config);
+    }
+
+    // Append image-caption chunks (PDF only, populated via extractAndCaptionImages)
+    // after the text chunks, so retrieval treats image content as ordinary chunks.
+    if (imageCaptions.length > 0) {
+      chunks = [...chunks, ...imageCaptionsToChunks(imageCaptions, chunks.length)];
     }
 
     // Add documentId to all chunks if provided

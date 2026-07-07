@@ -38,6 +38,7 @@ interface DocumentIngestionResult {
   filename: string;
   totalChunks: number;
   embeddingsGenerated: number;
+  imagesProcessed: number;
   status: string;
 }
 
@@ -100,6 +101,7 @@ async function ingestUploadedFile(
       filename: ingestionResult.filename,
       totalChunks: ingestionResult.totalChunks,
       embeddingsGenerated: ingestionResult.embeddingsGenerated,
+      imagesProcessed: ingestionResult.imagesProcessed,
       status: ingestionResult.status,
     };
 
@@ -191,6 +193,8 @@ async function ingestUploadedFile(
  *                       totalChunks:
  *                         type: number
  *                       embeddingsGenerated:
+ *                         type: number
+ *                       imagesProcessed:
  *                         type: number
  *                       status:
  *                         type: string

@@ -53,6 +53,7 @@ const ingestDocumentTool = createTool({
         filename: result.filename,
         totalChunks: result.totalChunks,
         embeddingsGenerated: result.embeddingsGenerated,
+        imagesProcessed: result.imagesProcessed,
         status: result.status,
         executionTimeMs: result.executionTimeMs,
         message: `Document successfully ingested: ${result.totalChunks} chunks created and embedded`,

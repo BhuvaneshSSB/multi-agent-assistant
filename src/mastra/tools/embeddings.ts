@@ -329,6 +329,7 @@ export async function embedAndStoreChunks(
       chunkContent: chunk.content,
       pageNumber: chunk.metadata.pageNumber,
       sectionTitle: chunk.metadata.sectionTitle,
+      contentType: chunk.metadata.contentType ?? "text",
     }));
 
     // Step 4: Store embeddings with metadata

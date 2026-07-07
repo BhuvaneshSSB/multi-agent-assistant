@@ -100,18 +100,21 @@ export async function parseExcel(buffer: Buffer): Promise<string> {
         const headers = Object.keys(sheetData[0]);
         text += `Columns: ${headers.join(", ")}\n\n`;
 
-        // Add rows as structured text
-        for (let i = 0; i < Math.min(sheetData.length, 100); i++) {
+        // Add every row as structured text. Previously capped at the first
+        // 100 rows (with a "... and N more rows" note that never survived
+        // into stored chunk metadata anyway), which silently discarded the
+        // rest of the sheet while the API still reported a normal success —
+        // see docs/test/04-rag-evaluation.md. tableAwareChunk groups rows
+        // into ~50-row chunks regardless of total count, the same way
+        // recursiveChunk already scales to hundreds of PDF pages, so there's
+        // no ingestion-side reason to truncate here.
+        for (let i = 0; i < sheetData.length; i++) {
           const row = sheetData[i];
           text += `Row ${i + 1}: `;
           text += Object.entries(row)
             .map(([key, value]) => `${key}: ${formatCellValue(value)}`)
             .join(" | ");
           text += "\n";
-        }
-
-        if (sheetData.length > 100) {
-          text += `\n... and ${sheetData.length - 100} more rows\n`;
         }
       }
 
@@ -153,17 +156,14 @@ export async function parseCSV(buffer: Buffer): Promise<string> {
       const headers = Object.keys(rows[0]);
       text += `Columns: ${headers.join(", ")}\n\n`;
 
-      for (let i = 0; i < Math.min(rows.length, 100); i++) {
+      // See the matching comment in parseExcel above — no row cap here either.
+      for (let i = 0; i < rows.length; i++) {
         const row = rows[i];
         text += `Row ${i + 1}: `;
         text += Object.entries(row)
           .map(([key, value]) => `${key}: ${value}`)
           .join(" | ");
         text += "\n";
-      }
-
-      if (rows.length > 100) {
-        text += `\n... and ${rows.length - 100} more rows\n`;
       }
     }
 
