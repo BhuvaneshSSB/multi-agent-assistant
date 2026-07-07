@@ -5,6 +5,8 @@ import { z } from "zod";
 import { logger } from "../../utils/logger";
 import { config } from "../../config/env";
 import { getDatabase } from "../../config/database";
+import { withRetry } from "../../utils/retry";
+import { openAiModelWithFallback } from "../../config/models";
 import { Chunk } from "./chunking";
 
 // ============================================================================
@@ -126,22 +128,14 @@ async function embedBatchWithRetry(
   batchLabel: string,
   maxRetries: number
 ): Promise<number[][]> {
-  for (let attempt = 0; ; attempt++) {
-    try {
-      const { embeddings } = await embedder.doEmbed({ values: batchTexts });
-      return embeddings;
-    } catch (error) {
-      if (attempt >= maxRetries || !isRetryableEmbeddingError(error)) {
-        logger.error(`[Embedding] ${batchLabel} failed`, { error });
-        throw error;
-      }
-      const delayMs = Math.min(1000 * 2 ** attempt, 8000);
-      logger.warn(`[Embedding] ${batchLabel} failed (attempt ${attempt + 1}/${maxRetries + 1}), retrying`, {
-        delayMs,
-        error: error instanceof Error ? error.message : error,
-      });
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
-    }
+  try {
+    return await withRetry(
+      async () => (await embedder.doEmbed({ values: batchTexts })).embeddings,
+      { maxRetries, isRetryable: isRetryableEmbeddingError, label: batchLabel }
+    );
+  } catch (error) {
+    logger.error(`[Embedding] ${batchLabel} failed`, { error });
+    throw error;
   }
 }
 
@@ -380,9 +374,10 @@ export async function searchSimilarChunks(
     });
 
     // Step 1: Generate embedding for query
-    const { embeddings: queryEmbeddings } = await embedder.doEmbed({
-      values: [query],
-    });
+    const { embeddings: queryEmbeddings } = await withRetry(
+      () => embedder.doEmbed({ values: [query] }),
+      { maxRetries: 3, isRetryable: isRetryableEmbeddingError, label: "query embedding" }
+    );
     const queryVector = queryEmbeddings[0];
 
     logger.info("[Embedding] Query embedding generated", {
@@ -436,7 +431,7 @@ const queryExpansionAgent = new Agent({
   name: "Query Expansion Agent",
   description:
     "Internal utility agent that rewrites a search query into alternate phrasings to improve semantic retrieval recall. Not part of the agent orchestration team — used only by the retrieval-gate.",
-  model: "openai/gpt-4o-mini",
+  ...openAiModelWithFallback("openai/gpt-4o-mini", "anthropic/claude-haiku-4-5-20251001"),
   instructions: `You rewrite a user's question into exactly 2 alternate search queries to improve semantic similarity search against source documents.
 1. A natural rephrasing of the same question, using different words/structure.
 2. A declarative statement written the way the answer might literally appear in the source text (a hypothetical answer sentence), not phrased as a question.

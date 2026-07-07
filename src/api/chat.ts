@@ -5,6 +5,7 @@ import { hybridSearchChunks } from "../mastra/tools/embeddings";
 import { getStore } from "../mastra/storage/store";
 import { ValidationError, DocumentFormat } from "../types/index";
 import { logger } from "../utils/logger";
+import { withRetry } from "../utils/retry";
 
 const VALID_DOCUMENT_FORMATS: DocumentFormat[] = ["pdf", "docx", "xlsx", "pptx", "csv"];
 const RETRIEVAL_TOP_K = 5;
@@ -209,11 +210,9 @@ export async function handleChat(
 
     if (ranQuery) {
       try {
-        const results = await hybridSearchChunks(
-          message,
-          RETRIEVAL_TOP_K,
-          conversationId,
-          RETRIEVAL_THRESHOLD
+        const results = await withRetry(
+          () => hybridSearchChunks(message, RETRIEVAL_TOP_K, conversationId, RETRIEVAL_THRESHOLD),
+          { maxRetries: 2, baseDelayMs: 300, maxDelayMs: 2000, label: "retrieval-gate search" }
         );
         relevantChunksFound = results.length;
 

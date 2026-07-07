@@ -11,6 +11,10 @@ export const config = {
   },
   mastra: {
     openaiApiKey: process.env.OPENAI_API_KEY,
+    // Optional. When set, agents add an Anthropic model as a runtime fallback
+    // behind their primary OpenAI model (see src/config/models.ts). Absent by
+    // default in this deployment — agents just retry the same OpenAI model.
+    anthropicApiKey: process.env.ANTHROPIC_API_KEY,
   },
   search: {
     newsApiKey: process.env.NEWS_API_KEY,

@@ -2,7 +2,7 @@ import { Agent } from "@mastra/core/agent";
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 import { allWritingSkills } from "../skills/writing-skills";
-import { config } from "../../config/env";
+import { openAiModelWithFallback } from "../../config/models";
 import { logger } from "../../utils/logger";
 
 const generateContentTool = createTool({
@@ -90,7 +90,7 @@ export const writerAgent = new Agent({
   description:
     "Generates high-quality written content in multiple formats. Uses specialized writing skills for blogs, emails, social media, marketing copy, documentation, and more.",
 
-  model: "openai/gpt-4o-mini",
+  ...openAiModelWithFallback("openai/gpt-4o-mini", "anthropic/claude-haiku-4-5-20251001"),
 
   instructions: `You are a professional content writer and editor specializing in multiple writing formats.
 
