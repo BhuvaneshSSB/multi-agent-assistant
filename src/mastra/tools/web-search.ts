@@ -14,8 +14,6 @@ interface DuckDuckGoResult {
 
 export async function searchDuckDuckGo(query: string): Promise<DuckDuckGoResult[]> {
   try {
-    console.log(`[DuckDuckGo] Searching: ${query}`);
-
     const response = await withRetry(
       () =>
         axios.get("https://api.duckduckgo.com/", {
@@ -32,7 +30,6 @@ export async function searchDuckDuckGo(query: string): Promise<DuckDuckGoResult[
 
     const results: DuckDuckGoResult[] = [];
 
-    // Get results from AbstractResults (main answer)
     if (response.data.AbstractURL && response.data.AbstractText) {
       results.push({
         title: response.data.Heading || query,
@@ -41,7 +38,6 @@ export async function searchDuckDuckGo(query: string): Promise<DuckDuckGoResult[
       });
     }
 
-    // Get results from RelatedTopics
     if (response.data.RelatedTopics && response.data.RelatedTopics.length > 0) {
       for (const topic of response.data.RelatedTopics.slice(0, 5)) {
         if (topic.FirstURL && topic.Text) {
@@ -54,7 +50,6 @@ export async function searchDuckDuckGo(query: string): Promise<DuckDuckGoResult[
       }
     }
 
-    console.log(`[DuckDuckGo] Found ${results.length} results`);
     return results;
   } catch (error) {
     console.error("[DuckDuckGo] Error:", error);
@@ -74,9 +69,6 @@ interface WikipediaResult {
 
 export async function searchWikipedia(query: string): Promise<WikipediaResult[]> {
   try {
-    console.log(`[Wikipedia] Searching: ${query}`);
-
-    // Search Wikipedia
     const searchResponse = await withRetry(
       () =>
         axios.get("https://en.wikipedia.org/w/api.php", {
@@ -94,11 +86,9 @@ export async function searchWikipedia(query: string): Promise<WikipediaResult[]>
     const results: WikipediaResult[] = [];
 
     if (searchResponse.data.query.search.length === 0) {
-      console.log("[Wikipedia] No results found");
       return results;
     }
 
-    // Get full content for each result
     for (const item of searchResponse.data.query.search.slice(0, 3)) {
       try {
         const pageResponse = await withRetry(
@@ -135,7 +125,6 @@ export async function searchWikipedia(query: string): Promise<WikipediaResult[]>
       }
     }
 
-    console.log(`[Wikipedia] Found ${results.length} results`);
     return results;
   } catch (error) {
     console.error("[Wikipedia] Error:", error);
@@ -162,8 +151,6 @@ export async function searchNews(query: string): Promise<NewsResult[]> {
       return [];
     }
 
-    console.log(`[NewsAPI] Searching: ${query}`);
-
     const response = await withRetry(
       () =>
         axios.get("https://newsapi.org/v2/everything", {
@@ -181,7 +168,6 @@ export async function searchNews(query: string): Promise<NewsResult[]> {
     const results: NewsResult[] = [];
 
     if (!response.data.articles || response.data.articles.length === 0) {
-      console.log("[NewsAPI] No articles found");
       return results;
     }
 
@@ -195,7 +181,6 @@ export async function searchNews(query: string): Promise<NewsResult[]> {
       });
     }
 
-    console.log(`[NewsAPI] Found ${results.length} articles`);
     return results;
   } catch (error) {
     console.error("[NewsAPI] Error:", error);
@@ -216,10 +201,7 @@ export interface SearchResult {
 }
 
 export async function combinedSearch(query: string): Promise<SearchResult[]> {
-  console.log(`[CombinedSearch] Searching for: ${query}`);
-
   try {
-    // Run all searches in parallel
     const [ddgResults, wikiResults, newsResults] = await Promise.all([
       searchDuckDuckGo(query),
       searchWikipedia(query),
@@ -228,7 +210,6 @@ export async function combinedSearch(query: string): Promise<SearchResult[]> {
 
     const results: SearchResult[] = [];
 
-    // Add DuckDuckGo results
     for (const result of ddgResults) {
       results.push({
         ...result,
@@ -236,7 +217,6 @@ export async function combinedSearch(query: string): Promise<SearchResult[]> {
       });
     }
 
-    // Add Wikipedia results
     for (const result of wikiResults) {
       results.push({
         ...result,
@@ -244,7 +224,6 @@ export async function combinedSearch(query: string): Promise<SearchResult[]> {
       });
     }
 
-    // Add News results
     for (const result of newsResults) {
       results.push({
         title: result.title,
@@ -255,7 +234,6 @@ export async function combinedSearch(query: string): Promise<SearchResult[]> {
       });
     }
 
-    console.log(`[CombinedSearch] Total results: ${results.length}`);
     return results;
   } catch (error) {
     console.error("[CombinedSearch] Error:", error);
@@ -274,14 +252,12 @@ export function formatSearchResultsForLLM(results: SearchResult[]): string {
 
   let formatted = "## Search Results with Citations\n\n";
 
-  // Group by source
   const bySource = {
     DuckDuckGo: results.filter((r) => r.source === "DuckDuckGo"),
     Wikipedia: results.filter((r) => r.source === "Wikipedia"),
     NewsAPI: results.filter((r) => r.source === "NewsAPI"),
   };
 
-  // Format DuckDuckGo results
   if (bySource.DuckDuckGo.length > 0) {
     formatted += "### General Information (Web Search)\n\n";
     for (let i = 0; i < bySource.DuckDuckGo.length; i++) {
@@ -291,7 +267,6 @@ export function formatSearchResultsForLLM(results: SearchResult[]): string {
     }
   }
 
-  // Format Wikipedia results
   if (bySource.Wikipedia.length > 0) {
     formatted += "### Wikipedia References\n\n";
     for (const result of bySource.Wikipedia) {
@@ -300,7 +275,6 @@ export function formatSearchResultsForLLM(results: SearchResult[]): string {
     }
   }
 
-  // Format News results
   if (bySource.NewsAPI.length > 0) {
     formatted += "### Latest News\n\n";
     for (const result of bySource.NewsAPI) {

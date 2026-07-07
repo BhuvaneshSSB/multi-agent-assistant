@@ -44,8 +44,6 @@ export function extractPDFMetadata(
   pages?: number
 ): DocumentMetadata {
   try {
-    logger.info("[Metadata] Extracting PDF metadata");
-
     const lines = text.split("\n");
     let title = filename.replace(/\.pdf$/i, "");
     let author = undefined;
@@ -94,12 +92,9 @@ export function extractWordMetadata(
   filename: string
 ): DocumentMetadata {
   try {
-    logger.info("[Metadata] Extracting Word document metadata");
-
     const title = filename.replace(/\.docx?$/i, "");
     const wordCount = text.split(/\s+/).length;
 
-    // Extract author if mentioned in document
     const authorMatch = text.match(/author:\s*(.+?)(?:\n|$)/i);
     const author = authorMatch ? authorMatch[1].trim() : undefined;
 
@@ -134,12 +129,9 @@ export function extractExcelMetadata(
   sheetNames?: string[]
 ): DocumentMetadata {
   try {
-    logger.info("[Metadata] Extracting Excel metadata");
-
     const title = filename.replace(/\.xlsx?$/i, "");
     const wordCount = text.split(/\s+/).length;
 
-    // Extract sheet information
     const sheetInfo = sheetNames ? ` (Sheets: ${sheetNames.join(", ")})` : "";
 
     const metadata: DocumentMetadata = {
@@ -174,8 +166,6 @@ export function extractCSVMetadata(
   filename: string
 ): DocumentMetadata {
   try {
-    logger.info("[Metadata] Extracting CSV metadata");
-
     const title = filename.replace(/\.csv$/i, "");
     const wordCount = text.split(/\s+/).length;
 
@@ -209,8 +199,6 @@ export function extractPowerPointMetadata(
   slideCount?: number
 ): DocumentMetadata {
   try {
-    logger.info("[Metadata] Extracting PowerPoint metadata");
-
     const title = filename.replace(/\.pptx?$/i, "");
     const wordCount = text.split(/\s+/).length;
 
@@ -392,7 +380,6 @@ export function extractAllMetadata(
 
     let documentMetadata: DocumentMetadata;
 
-    // Extract document-level metadata by format
     switch (fileType) {
       case "pdf":
         documentMetadata = extractPDFMetadata(text, documentId, filename, additionalInfo?.pages);
@@ -418,7 +405,6 @@ export function extractAllMetadata(
         throw new Error(`Unsupported file type: ${fileType}`);
     }
 
-    // Set user and conversation context
     if (additionalInfo?.userId) {
       documentMetadata.userId = additionalInfo.userId;
     }
@@ -426,7 +412,6 @@ export function extractAllMetadata(
       documentMetadata.conversationId = additionalInfo.conversationId;
     }
 
-    // Detect structural metadata
     const pageBreaks = detectPageBreaks(text);
     const hierarchy = detectSectionHierarchy(text);
 

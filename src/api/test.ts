@@ -13,7 +13,6 @@ export async function handleParseTest(
     const uploadedFile = req.file;
     const format = req.body.format || uploadedFile?.originalname.split(".").pop();
 
-    // Validation
     if (!uploadedFile) {
       throw new ValidationError("file is required (multipart upload)");
     }
@@ -22,24 +21,20 @@ export async function handleParseTest(
       throw new ValidationError("format is required (pdf, docx, xlsx, pptx, or csv)");
     }
 
-    console.log(`[Test] Parsing ${format} document...`);
-
     const fileBuffer = uploadedFile.buffer;
 
-    // Parse document
     const startTime = Date.now();
     const text = await parseDocument(fileBuffer, format);
     const parseTime = Date.now() - startTime;
 
-    // Return results
     res.status(200).json({
       success: true,
       format,
       parseTimeMs: parseTime,
       textLength: text.length,
       wordCount: text.split(/\s+/).length,
-      preview: text.substring(0, 1000), // First 1000 chars
-      fullText: text, // Full text for testing
+      preview: text.substring(0, 1000),
+      fullText: text,
     });
   } catch (error) {
     console.error("[Test] Error:", error);
@@ -59,8 +54,6 @@ export async function handleChunkTest(
     if (!text || typeof text !== "string") {
       throw new ValidationError("text is required");
     }
-
-    console.log(`[Test] Chunking text of ${text.length} characters...`);
 
     const startTime = Date.now();
     const chunks = await chunkDocument(text, {
@@ -82,7 +75,7 @@ export async function handleChunkTest(
         length: c.content.length,
         preview: c.content.substring(0, 100),
       })),
-      fullChunks: chunks, // For inspection
+      fullChunks: chunks,
     });
   } catch (error) {
     console.error("[Test] Error:", error);
@@ -134,8 +127,6 @@ export async function handleFormatAwareChunkTest(
     if (!validFormats.includes(format)) {
       throw new ValidationError(`format must be one of: ${validFormats.join(", ")}`);
     }
-
-    console.log(`[Test] Format-aware chunking for ${format}...`);
 
     const startTime = Date.now();
     const chunks = await chunkDocumentFormatAware(text, format as DocumentFormat, documentId, {

@@ -248,7 +248,6 @@ export async function handleChat(
     const { conversationId, userId, message } = req.body;
     const uploadedFiles = (req.files as Express.Multer.File[] | undefined) ?? [];
 
-    // Validation
     if (!conversationId) {
       throw new ValidationError("conversationId is required");
     }
@@ -262,8 +261,6 @@ export async function handleChat(
         "message is required and must be a string when no file is attached"
       );
     }
-
-    console.log(`[Chat] User: ${userId}, Conversation: ${conversationId}`);
 
     const store = getStore();
 
@@ -507,8 +504,6 @@ export async function handleChat(
 
     const supervisorMessage = `${message || "I've uploaded document(s)."}${documentNote}${retrievalNote}`;
 
-    console.log(`[Chat] Message: ${supervisorMessage.substring(0, 150)}...`);
-
     // Call supervisor agent — track real delegations via the delegation hook
     // rather than assuming which sub-agents ran.
     const delegatedAgents: string[] = [];
@@ -529,7 +524,7 @@ export async function handleChat(
         thread: conversationId,
         resource: userId,
       },
-      maxSteps: 10, // Allow supervisor to make up to 10 agent calls
+      maxSteps: 10,
       delegation: {
         onDelegationStart: async (context) => {
           delegatedAgents.push(context.primitiveId);
@@ -540,9 +535,6 @@ export async function handleChat(
 
     const executionTime = Date.now() - startTime;
 
-    console.log(`[Chat] Response generated in ${executionTime}ms`);
-
-    // Return response
     res.status(200).json({
       conversationId,
       userId,
@@ -555,7 +547,7 @@ export async function handleChat(
       retrieval: ranQuery ? { ranQuery, relevantChunksFound } : null,
     });
   } catch (error) {
-    console.error("[Chat] Error:", error);
+    logger.error("[Chat] Error", error);
     next(error);
   }
 }

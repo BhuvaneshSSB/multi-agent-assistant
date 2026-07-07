@@ -971,6 +971,4 @@ export const allWritingSkills = [
   // General Content Skills
   reportSkill,
   guideSkill,
-
-  // Future: Add 140+ more skills easily
 ];

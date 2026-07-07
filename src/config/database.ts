@@ -29,8 +29,7 @@ export function getDatabase(): Pool {
 export async function testDatabaseConnection(): Promise<boolean> {
     try{
         const db = getDatabase();
-        const result = await db.query("SELECT NOW()");
-        console.log("Database connection successful:", result.rows[0]);
+        await db.query("SELECT NOW()");
         return true;
     } catch(error) {
         console.error("Database connection failed:", error);

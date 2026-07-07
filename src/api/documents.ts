@@ -101,7 +101,6 @@ export async function handleUploadDocument(
 
     const filename = uploadedFile.originalname;
 
-    // Detect file format from filename
     const ext = filename.split(".").pop()?.toLowerCase();
     const validFormats = ["pdf", "docx", "xlsx", "pptx", "csv"];
     if (!ext || !validFormats.includes(ext)) {
@@ -112,7 +111,6 @@ export async function handleUploadDocument(
 
     const format = ext as DocumentFormat;
 
-    // Store document metadata in database
     const store = getStore();
     const fileBuffer = uploadedFile.buffer;
 
@@ -262,7 +260,6 @@ export async function handleQueryDocument(
     const conversationId = req.body.conversationId || uuidv4();
     const userId = req.body.userId || uuidv4();
 
-    // Validation
     if (!query || typeof query !== "string") {
       throw new ValidationError("query is required");
     }
@@ -277,7 +274,6 @@ export async function handleQueryDocument(
       userId,
     });
 
-    // Call document agent to search and answer
     const startTime = Date.now();
 
     const agentResponse = await documentAgent.generate(

@@ -236,8 +236,6 @@ export async function parseDocument(
   buffer: Buffer,
   format: DocumentFormat
 ): Promise<string> {
-  console.log(`[Document Parser] Parsing ${format.toUpperCase()} document...`);
-
   switch (format) {
     case "pdf":
       return parsePDF(buffer);

@@ -46,13 +46,6 @@ const pgVector = new PgVector({
 
 export async function ensureIndexCreated(): Promise<void> {
   try {
-    logger.info("[Embedding] Ensuring index exists", {
-      indexName: EMBEDDING_CONFIG.indexName,
-      dimension: EMBEDDING_CONFIG.dimension,
-    });
-
-    // PgVector will create index if it doesn't exist
-    // This is safe to call multiple times (idempotent)
     await pgVector.createIndex({
       indexName: EMBEDDING_CONFIG.indexName,
       dimension: EMBEDDING_CONFIG.dimension,
@@ -62,7 +55,6 @@ export async function ensureIndexCreated(): Promise<void> {
       indexName: EMBEDDING_CONFIG.indexName,
     });
   } catch (error) {
-    // Index might already exist - this is fine
     if (error instanceof Error && error.message.includes("already exists")) {
       logger.info("[Embedding] Index already exists (expected)");
       return;
@@ -238,11 +230,6 @@ export async function storeEmbeddings(
       );
     }
 
-    logger.info("[Embedding] Storing embeddings in PgVector", {
-      indexName: EMBEDDING_CONFIG.indexName,
-      embeddingCount: embeddings.length,
-    });
-
     // Ensure both indexes exist before storing (vector for semantic search,
     // full-text for keyword/BM25-style search — see hybridSearchChunks below)
     const indexEnsureStart = Date.now();
@@ -250,7 +237,6 @@ export async function storeEmbeddings(
     await ensureFullTextIndexCreated();
     const indexEnsureMs = Date.now() - indexEnsureStart;
 
-    // Prepare ids and metadata for upsert
     const ids = metadata.map(
       (m) => m.documentId + "-" + m.chunkIndex
     );
@@ -312,20 +298,12 @@ export async function embedAndStoreChunks(
   conversationId: string
 ): Promise<EmbedAndStoreTimings> {
   try {
-    logger.info("[Embedding] Starting embed and store pipeline", {
-      documentId,
-      chunkCount: chunks.length,
-    });
-
-    // Step 1: Extract texts from chunks
     const texts = chunks.map((chunk) => chunk.content);
 
-    // Step 2: Generate embeddings
     const embedStart = Date.now();
     const embeddings = await generateEmbeddings(texts);
     const embedMs = Date.now() - embedStart;
 
-    // Step 3: Prepare metadata
     const metadata: EmbeddingMetadata[] = chunks.map((chunk) => ({
       documentId,
       conversationId,
@@ -338,7 +316,6 @@ export async function embedAndStoreChunks(
       contentType: chunk.metadata.contentType ?? "text",
     }));
 
-    // Step 4: Store embeddings with metadata
     const { indexEnsureMs, upsertMs } = await storeEmbeddings(embeddings, metadata);
 
     logger.info("[Embedding] Embed and store pipeline completed", {
@@ -382,18 +359,13 @@ export async function searchSimilarChunks(
       documentId,
     });
 
-    // Step 1: Generate embedding for query
     const { embeddings: queryEmbeddings } = await withRetry(
       () => embedder.doEmbed({ values: [query] }),
       { maxRetries: 3, isRetryable: isRetryableEmbeddingError, label: "query embedding" }
     );
     const queryVector = queryEmbeddings[0];
 
-    logger.info("[Embedding] Query embedding generated", {
-      dimension: queryVector.length,
-    });
-
-    // Step 2: Search in PgVector, scoped to the conversation (and optionally
+    // Search in PgVector, scoped to the conversation (and optionally
     // a single document within it, for per-document comparison retrieval) so
     // unrelated conversations'/documents' content never surfaces as an answer.
     const filter =

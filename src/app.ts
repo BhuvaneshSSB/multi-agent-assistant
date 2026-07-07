@@ -99,7 +99,6 @@ app.use(
 // Start server
 async function start() {
   try {
-    // Initialize database
     console.log("[Server] Initializing database...");
     initializeDatabase();
     const dbConnected = await testDatabaseConnection();
@@ -108,7 +107,6 @@ async function start() {
       console.warn("[Server] ⚠ Database connection failed. Some features may not work.");
     }
 
-    // Start Express server
     const server = app.listen(PORT, () => {
       console.log(`[Server] ✓ Listening on http://localhost:${PORT}`);
       console.log(`[Server] ✓ Health check: http://localhost:${PORT}/health`);

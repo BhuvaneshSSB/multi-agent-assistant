@@ -544,27 +544,22 @@ export async function chunkDocumentFormatAware(
 
     switch (format) {
       case "pdf":
-        logger.info("[Chunking] PDF detected - using page-aware recursive strategy");
         chunks = await pdfAwareChunk(text, config);
         break;
 
       case "docx":
-        logger.info("[Chunking] Word document detected - using recursive strategy");
         chunks = await recursiveChunk(text, config);
         break;
 
       case "xlsx":
-        logger.info("[Chunking] Excel detected - using table-aware strategy");
         chunks = await tableAwareChunk(text, config);
         break;
 
       case "csv":
-        logger.info("[Chunking] CSV detected - using table-aware strategy");
         chunks = await tableAwareChunk(text, config);
         break;
 
       case "pptx":
-        logger.info("[Chunking] PowerPoint detected - using slide-based strategy");
         chunks = await slideBasedChunk(text, config);
         break;
 
