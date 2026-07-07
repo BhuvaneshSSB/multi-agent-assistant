@@ -31,7 +31,12 @@ export const memory = new Memory({
     lastMessages: 10,
 
     // Layer 2: Observational Memory
-    observationalMemory: true,
+    // Default model is google/gemini-2.5-flash, but only OPENAI_API_KEY is
+    // configured in this project — route both the Observer and Reflector
+    // agents through OpenAI instead.
+    observationalMemory: {
+      model: "openai/gpt-4o-mini",
+    },
 
     // Layer 3: Working Memory
     workingMemory: {

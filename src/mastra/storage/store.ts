@@ -3,7 +3,6 @@ import {
   Message,
   Conversation,
   Observation,
-  DocumentChunk,
   DocumentFormat,
   DatabaseError,
 } from "../../types/index";
@@ -68,44 +67,6 @@ export class Store {
     }
   }
 
-  // ============================================================================
-  // DOCUMENT CHUNK OPERATIONS
-  // ============================================================================
-
-  async saveChunk(
-    documentId: string,
-    chunkIndex: number,
-    content: string,
-    embedding: number[],
-    pageNumber?: number,
-    sectionTitle?: string,
-    hierarchy?: string[]
-  ): Promise<string> {
-    try {
-      const result = await this.db.query(
-        `INSERT INTO document_chunks (document_id, chunk_index, content, embedding, page_number, section_title, hierarchy, created_at)
-         VALUES ($1, $2, $3, $4::vector, $5, $6, $7, NOW())
-         RETURNING id`,
-        [
-          documentId,
-          chunkIndex,
-          content,
-          `[${embedding.join(",")}]`,
-          pageNumber || null,
-          sectionTitle || null,
-          hierarchy ? JSON.stringify(hierarchy) : null,
-        ]
-      );
-
-      return result.rows[0].id;
-    } catch (error) {
-      throw new DatabaseError(
-        `Failed to save chunk: ${error instanceof Error ? error.message : String(error)}`
-      );
-    }
-  }
-
-  
   // ============================================================================
   // UTILITY OPERATIONS
   // ============================================================================
