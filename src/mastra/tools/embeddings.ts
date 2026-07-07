@@ -363,7 +363,8 @@ export async function searchSimilarChunks(
   query: string,
   topK: number = 5,
   similarityThreshold: number = 0.5,
-  conversationId?: string
+  conversationId?: string,
+  documentId?: string
 ): Promise<SearchResult[]> {
   try {
     logger.info("[Embedding] Searching similar chunks", {
@@ -371,6 +372,7 @@ export async function searchSimilarChunks(
       topK,
       threshold: similarityThreshold,
       conversationId,
+      documentId,
     });
 
     // Step 1: Generate embedding for query
@@ -384,14 +386,20 @@ export async function searchSimilarChunks(
       dimension: queryVector.length,
     });
 
-    // Step 2: Search in PgVector, scoped to the conversation when provided
-    // so unrelated conversations' documents never surface as answers.
+    // Step 2: Search in PgVector, scoped to the conversation (and optionally
+    // a single document within it, for per-document comparison retrieval) so
+    // unrelated conversations'/documents' content never surfaces as an answer.
+    const filter =
+      conversationId || documentId
+        ? { ...(conversationId ? { conversationId } : {}), ...(documentId ? { documentId } : {}) }
+        : undefined;
+
     const results = await pgVector.query({
       indexName: EMBEDDING_CONFIG.indexName,
       queryVector,
       topK,
       minScore: similarityThreshold,
-      filter: conversationId ? { conversationId } : undefined,
+      filter,
     });
 
     logger.info("[Embedding] Search completed", {
@@ -519,7 +527,8 @@ async function runKeywordQuery(
   tsqueryExpr: string,
   query: string,
   topK: number,
-  conversationId?: string
+  conversationId?: string,
+  documentId?: string
 ): Promise<SearchResult[]> {
   const db = getDatabase();
   const table = `"${EMBEDDING_CONFIG.indexName}"`;
@@ -529,6 +538,11 @@ async function runKeywordQuery(
   if (conversationId) {
     conditions.push(`metadata->>'conversationId' = $${params.length + 1}`);
     params.push(conversationId);
+  }
+
+  if (documentId) {
+    conditions.push(`metadata->>'documentId' = $${params.length + 1}`);
+    params.push(documentId);
   }
 
   params.push(topK);
@@ -561,19 +575,21 @@ export interface KeywordSearchResult extends SearchResult {
 export async function keywordSearchChunks(
   query: string,
   topK: number = 5,
-  conversationId?: string
+  conversationId?: string,
+  documentId?: string
 ): Promise<KeywordSearchResult[]> {
   try {
     logger.info("[Embedding] Running keyword search", {
       query: query.substring(0, 100),
       topK,
       conversationId,
+      documentId,
     });
 
-    let rows = await runKeywordQuery(AND_TSQUERY, query, topK, conversationId);
+    let rows = await runKeywordQuery(AND_TSQUERY, query, topK, conversationId, documentId);
     let matchTier: KeywordSearchResult["matchTier"] = "strict";
     if (rows.length === 0) {
-      rows = await runKeywordQuery(OR_TSQUERY, query, topK, conversationId);
+      rows = await runKeywordQuery(OR_TSQUERY, query, topK, conversationId, documentId);
       matchTier = "loose";
     }
 
@@ -652,7 +668,8 @@ export async function hybridSearchChunks(
   topK: number = 5,
   conversationId?: string,
   vectorRelevanceThreshold: number = 0.5,
-  looseKeywordVectorFloor: number = 0.2
+  looseKeywordVectorFloor: number = 0.2,
+  documentId?: string
 ): Promise<SearchResult[]> {
   // Pull a wider candidate pool from each ranking than `topK` before fusing,
   // so a chunk that's e.g. #2 on keyword but outside vector's top-5 still
@@ -660,8 +677,8 @@ export async function hybridSearchChunks(
   const candidatePoolSize = topK * 4;
 
   const [vectorResults, keywordResults] = await Promise.all([
-    searchSimilarChunks(query, candidatePoolSize, 0, conversationId),
-    keywordSearchChunks(query, candidatePoolSize, conversationId),
+    searchSimilarChunks(query, candidatePoolSize, 0, conversationId, documentId),
+    keywordSearchChunks(query, candidatePoolSize, conversationId, documentId),
   ]);
 
   logger.info("[Embedding] Hybrid search completed", {

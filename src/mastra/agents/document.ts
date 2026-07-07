@@ -176,7 +176,13 @@ Best Practices:
 - Ask for clarification if question is ambiguous
 - Offer to search for additional information
 - Maintain document context in your responses
-- Note any limitations in the available data`,
+- Note any limitations in the available data
+
+Comparison Requests:
+- When asked to compare, contrast, or note differences/similarities between uploaded documents, first identify each distinct source document present in the provided context by its filename (shown in the retrieved context labels).
+- Structure your answer around each document individually before synthesizing: summarize what each file says on the relevant point, then explicitly state where they agree (similarities) and where they diverge (differences).
+- Attribute every claim to its specific source file by name (e.g. "contract_A.pdf states..." / "resume_B.pdf lists..."), never a generic "the document".
+- If the retrieved context lacks content for one of the documents being compared, say so explicitly rather than basing the comparison on only one side.`,
 
   tools: {
     "ingest-document": ingestDocumentTool,

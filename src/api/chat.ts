@@ -5,11 +5,116 @@ import { hybridSearchChunks } from "../mastra/tools/embeddings";
 import { getStore } from "../mastra/storage/store";
 import { ValidationError, DocumentFormat } from "../types/index";
 import { logger } from "../utils/logger";
-import { withRetry } from "../utils/retry";
+import { withRetry, isRetryableHttpError } from "../utils/retry";
 
 const VALID_DOCUMENT_FORMATS: DocumentFormat[] = ["pdf", "docx", "xlsx", "pptx", "csv"];
 const RETRIEVAL_TOP_K = 5;
 const RETRIEVAL_THRESHOLD = 0.5;
+
+// Deterministic comparison-intent gate — kept as a regex, not a model call,
+// to match this codebase's "retrieval determines relevance, not the model's
+// guess" philosophy (docs/rag/12). False negatives just fall back to the
+// existing global-topK path, so the worst case is "no worse than before."
+const COMPARISON_INTENT_REGEX =
+  /\b(compare|comparison|comparing|compares|difference|differences|differ|differing|versus|vs\.?|similar|similarity|similarities|contrast|contrasting)\b/i;
+const COMPARISON_PER_DOC_TOP_K = 3;
+const MAX_COMPARISON_DOCUMENTS = 5; // beyond this, fall back to the global-topK path rather than firing unbounded concurrent searches
+
+// Structured, durable record of which documents/chunks a turn's retrieval
+// gate drew on — attached to the persisted message's `content.metadata` so
+// the association survives independent of the `[System: ...]` note's wording.
+interface RetrievalTurnMetadata {
+  documentIds: string[];
+  documentRefs: Array<{
+    documentId: string;
+    filename?: string;
+    chunkIndex: number;
+    pageNumber?: number;
+  }>;
+}
+
+interface DocumentIngestionResult {
+  documentId: string;
+  filename: string;
+  totalChunks: number;
+  embeddingsGenerated: number;
+  status: string;
+}
+
+// Ingests a single attached file (validate → save → parse/chunk/embed).
+// The whole per-document pipeline is retried with exponential backoff on
+// transient failures (rate limits, 5xx, connection resets) — deterministic
+// failures (bad format, corrupt file) are not, since retrying those just
+// repeats the same failure. Called concurrently, once per uploaded file, so
+// a slow or rate-limited document never blocks its siblings from finishing.
+async function ingestUploadedFile(
+  uploadedFile: Express.Multer.File,
+  conversationId: string,
+  userId: string,
+  store: ReturnType<typeof getStore>
+): Promise<DocumentIngestionResult> {
+  const filename = uploadedFile.originalname;
+  const ext = filename.split(".").pop()?.toLowerCase();
+
+  if (!ext || !VALID_DOCUMENT_FORMATS.includes(ext as DocumentFormat)) {
+    throw new ValidationError(
+      `Invalid file format for "${filename}". Supported: ${VALID_DOCUMENT_FORMATS.join(", ")}`
+    );
+  }
+
+  const format = ext as DocumentFormat;
+
+  const documentId = await store.saveDocument(
+    conversationId,
+    userId,
+    filename,
+    format,
+    uploadedFile.buffer.length,
+    { uploadedAt: new Date().toISOString() }
+  );
+
+  logger.info("[Chat] Document attached, ingesting", { filename, format, documentId });
+
+  try {
+    const ingestionResult = await withRetry(
+      () =>
+        executeDocumentIngestion(
+          uploadedFile.buffer,
+          filename,
+          format,
+          userId,
+          conversationId,
+          documentId
+        ),
+      {
+        maxRetries: 2,
+        baseDelayMs: 1000,
+        maxDelayMs: 8000,
+        isRetryable: isRetryableHttpError,
+        label: `document ingestion (${filename})`,
+      }
+    );
+
+    const documentResult: DocumentIngestionResult = {
+      documentId: ingestionResult.documentId,
+      filename: ingestionResult.filename,
+      totalChunks: ingestionResult.totalChunks,
+      embeddingsGenerated: ingestionResult.embeddingsGenerated,
+      status: ingestionResult.status,
+    };
+
+    logger.info("[Chat] Document ingestion completed", documentResult);
+    return documentResult;
+  } catch (ingestionError) {
+    await store.updateDocumentStatus(
+      documentId,
+      "failed",
+      undefined,
+      ingestionError instanceof Error ? ingestionError.message : String(ingestionError)
+    );
+    throw ingestionError;
+  }
+}
 
 /**
  * @openapi
@@ -43,10 +148,12 @@ const RETRIEVAL_THRESHOLD = 0.5;
  *               message:
  *                 type: string
  *                 description: Required unless a file is attached
- *               file:
- *                 type: string
- *                 format: binary
- *                 description: Optional document to ingest (pdf, docx, xlsx, pptx, csv)
+ *               files:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                   format: binary
+ *                 description: Optional document(s) to ingest, up to 5 (pdf, docx, xlsx, pptx, csv)
  *     responses:
  *       200:
  *         description: Assistant response
@@ -72,20 +179,21 @@ const RETRIEVAL_THRESHOLD = 0.5;
  *                   type: array
  *                   items:
  *                     type: string
- *                 document:
- *                   type: object
- *                   nullable: true
- *                   properties:
- *                     documentId:
- *                       type: string
- *                     filename:
- *                       type: string
- *                     totalChunks:
- *                       type: number
- *                     embeddingsGenerated:
- *                       type: number
- *                     status:
- *                       type: string
+ *                 documents:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       documentId:
+ *                         type: string
+ *                       filename:
+ *                         type: string
+ *                       totalChunks:
+ *                         type: number
+ *                       embeddingsGenerated:
+ *                         type: number
+ *                       status:
+ *                         type: string
  *                 retrieval:
  *                   type: object
  *                   nullable: true
@@ -108,7 +216,7 @@ export async function handleChat(
 ) {
   try {
     const { conversationId, userId, message } = req.body;
-    const uploadedFile = req.file;
+    const uploadedFiles = (req.files as Express.Multer.File[] | undefined) ?? [];
 
     // Validation
     if (!conversationId) {
@@ -119,7 +227,7 @@ export async function handleChat(
       throw new ValidationError("userId is required");
     }
 
-    if (!uploadedFile && (!message || typeof message !== "string")) {
+    if (uploadedFiles.length === 0 && (!message || typeof message !== "string")) {
       throw new ValidationError(
         "message is required and must be a string when no file is attached"
       );
@@ -127,75 +235,39 @@ export async function handleChat(
 
     console.log(`[Chat] User: ${userId}, Conversation: ${conversationId}`);
 
+    const store = getStore();
+
     // ------------------------------------------------------------------
-    // Step 1: Unconditional ingestion. If a file is attached, it always
-    // goes through the pipeline — this is never a decision the agent makes.
+    // Step 1: Unconditional ingestion. Any attached files always go through
+    // the pipeline — this is never a decision the agent makes. Files are
+    // ingested concurrently (one pipeline per file, each retried with its
+    // own exponential backoff) rather than one at a time, so N files take
+    // roughly as long as the slowest one instead of the sum of all of them.
     // ------------------------------------------------------------------
-    let documentResult: {
-      documentId: string;
-      filename: string;
-      totalChunks: number;
-      embeddingsGenerated: number;
-      status: string;
-    } | null = null;
+    const documentResults: DocumentIngestionResult[] = [];
 
-    if (uploadedFile) {
-      const filename = uploadedFile.originalname;
-      const ext = filename.split(".").pop()?.toLowerCase();
-
-      if (!ext || !VALID_DOCUMENT_FORMATS.includes(ext as DocumentFormat)) {
-        throw new ValidationError(
-          `Invalid file format. Supported: ${VALID_DOCUMENT_FORMATS.join(", ")}`
-        );
-      }
-
-      const format = ext as DocumentFormat;
-
-      const store = getStore();
-      const documentId = await store.saveDocument(
-        conversationId,
-        userId,
-        filename,
-        format,
-        uploadedFile.buffer.length,
-        { uploadedAt: new Date().toISOString() }
+    if (uploadedFiles.length > 0) {
+      const settled = await Promise.allSettled(
+        uploadedFiles.map((uploadedFile) =>
+          ingestUploadedFile(uploadedFile, conversationId, userId, store)
+        )
       );
 
-      logger.info("[Chat] Document attached, ingesting", {
-        filename,
-        format,
-        documentId,
-      });
+      for (const result of settled) {
+        if (result.status === "fulfilled") {
+          documentResults.push(result.value);
+        }
+      }
 
-      try {
-        const ingestionResult = await executeDocumentIngestion(
-          uploadedFile.buffer,
-          filename,
-          format,
-          userId,
-          conversationId,
-          documentId
-        );
-
-        documentResult = {
-          documentId: ingestionResult.documentId,
-          filename: ingestionResult.filename,
-          totalChunks: ingestionResult.totalChunks,
-          embeddingsGenerated: ingestionResult.embeddingsGenerated,
-          status: ingestionResult.status,
-        };
-
-        logger.info("[Chat] Document ingestion completed", documentResult);
-      } catch (ingestionError) {
-        await store.updateDocumentStatus(
-          documentId,
-          "failed",
-          undefined,
-          ingestionError instanceof Error
-            ? ingestionError.message
-            : String(ingestionError)
-        );
-        throw ingestionError;
+      // All files were given a chance to complete (nothing is aborted just
+      // because a sibling failed); only after that do we surface a failure —
+      // matching the previous all-or-nothing contract for the HTTP response,
+      // even though ingestion itself no longer stops early on first failure.
+      const firstFailure = settled.find(
+        (result): result is PromiseRejectedResult => result.status === "rejected"
+      );
+      if (firstFailure) {
+        throw firstFailure.reason;
       }
     }
 
@@ -206,30 +278,112 @@ export async function handleChat(
     // ------------------------------------------------------------------
     let retrievalNote = "";
     let relevantChunksFound = 0;
+    let retrievalMetadata: RetrievalTurnMetadata | null = null;
     const ranQuery = typeof message === "string" && message.length > 0;
 
     if (ranQuery) {
       try {
-        const results = await withRetry(
-          () => hybridSearchChunks(message, RETRIEVAL_TOP_K, conversationId, RETRIEVAL_THRESHOLD),
-          { maxRetries: 2, baseDelayMs: 300, maxDelayMs: 2000, label: "retrieval-gate search" }
-        );
-        relevantChunksFound = results.length;
+        // Look up completed documents in this conversation once — used both
+        // to decide whether this is a comparison request and to label every
+        // retrieved chunk by filename instead of an opaque documentId.
+        const completedDocuments = await store.getDocumentsByConversation(conversationId);
+        const filenameById = new Map(completedDocuments.map((d) => [d.id, d.filename]));
 
-        if (results.length > 0) {
-          const context = results
-            .map(
-              (r, i) =>
-                `[${i + 1}] (documentId: ${r.metadata.documentId}${
-                  r.metadata.pageNumber ? `, page ${r.metadata.pageNumber}` : ""
-                }) ${r.metadata.chunkContent}`
-            )
-            .join("\n\n");
+        const useComparisonBranch =
+          COMPARISON_INTENT_REGEX.test(message) &&
+          completedDocuments.length >= 2 &&
+          completedDocuments.length <= MAX_COMPARISON_DOCUMENTS;
 
-          retrievalNote = `\n\n[System: retrieval found ${results.length} relevant chunk(s) in this conversation's uploaded documents. Use the Document Agent to answer, grounded in this retrieved context — cite document/page:\n${context}]`;
+        if (useComparisonBranch) {
+          // Comparison request: search each document separately (instead of
+          // one shared global top-K) so every document gets a guaranteed
+          // slice of context rather than competing with the others for a
+          // handful of shared slots.
+          const perDocResults = await withRetry(
+            () =>
+              Promise.all(
+                completedDocuments.map((doc) =>
+                  hybridSearchChunks(
+                    message,
+                    COMPARISON_PER_DOC_TOP_K,
+                    conversationId,
+                    RETRIEVAL_THRESHOLD,
+                    undefined,
+                    doc.id
+                  )
+                )
+              ),
+            { maxRetries: 2, baseDelayMs: 300, maxDelayMs: 2000, label: "retrieval-gate comparison search" }
+          );
+
+          relevantChunksFound = perDocResults.reduce((sum, r) => sum + r.length, 0);
+
+          if (relevantChunksFound > 0) {
+            const sections = completedDocuments.map((doc, idx) => {
+              const docResults = perDocResults[idx];
+              if (docResults.length === 0) {
+                return `### ${doc.filename} (documentId: ${doc.id})\n(no relevant content retrieved for this document)`;
+              }
+              const chunksText = docResults
+                .map(
+                  (r, i) =>
+                    `[${i + 1}]${r.metadata.pageNumber ? ` (page ${r.metadata.pageNumber})` : ""} ${r.metadata.chunkContent}`
+                )
+                .join("\n\n");
+              return `### ${doc.filename} (documentId: ${doc.id})\n${chunksText}`;
+            });
+
+            retrievalNote = `\n\n[System: comparison request detected across ${completedDocuments.length} uploaded documents in this conversation. Retrieval ran separately per document (top ${COMPARISON_PER_DOC_TOP_K} each) so every document gets a fair share of context, not just whichever scores highest overall. Use the Document Agent to answer, addressing each document individually before comparing similarities/differences, and attribute every claim to its specific source file:\n\n${sections.join("\n\n")}]`;
+
+            const documentRefs = perDocResults.flatMap((docResults) =>
+              docResults.map((r) => ({
+                documentId: r.metadata.documentId,
+                filename: filenameById.get(r.metadata.documentId),
+                chunkIndex: r.metadata.chunkIndex,
+                pageNumber: r.metadata.pageNumber,
+              }))
+            );
+            retrievalMetadata = {
+              documentIds: [...new Set(documentRefs.map((d) => d.documentId))],
+              documentRefs,
+            };
+          } else {
+            retrievalNote =
+              "\n\n[System: no relevant content found in this conversation's uploaded documents for this comparison request. Use the Research Agent instead, or ask the user to clarify.]";
+          }
         } else {
-          retrievalNote =
-            "\n\n[System: no relevant content found in this conversation's uploaded documents (or none have been uploaded). Use the Research Agent instead.]";
+          const results = await withRetry(
+            () => hybridSearchChunks(message, RETRIEVAL_TOP_K, conversationId, RETRIEVAL_THRESHOLD),
+            { maxRetries: 2, baseDelayMs: 300, maxDelayMs: 2000, label: "retrieval-gate search" }
+          );
+          relevantChunksFound = results.length;
+
+          if (results.length > 0) {
+            const context = results
+              .map((r, i) => {
+                const filename = filenameById.get(r.metadata.documentId);
+                return `[${i + 1}] (file: ${filename ?? "unknown"}, documentId: ${r.metadata.documentId}${
+                  r.metadata.pageNumber ? `, page ${r.metadata.pageNumber}` : ""
+                }) ${r.metadata.chunkContent}`;
+              })
+              .join("\n\n");
+
+            retrievalNote = `\n\n[System: retrieval found ${results.length} relevant chunk(s) in this conversation's uploaded documents. Use the Document Agent to answer, grounded in this retrieved context — cite document/page:\n${context}]`;
+
+            const documentRefs = results.map((r) => ({
+              documentId: r.metadata.documentId,
+              filename: filenameById.get(r.metadata.documentId),
+              chunkIndex: r.metadata.chunkIndex,
+              pageNumber: r.metadata.pageNumber,
+            }));
+            retrievalMetadata = {
+              documentIds: [...new Set(documentRefs.map((d) => d.documentId))],
+              documentRefs,
+            };
+          } else {
+            retrievalNote =
+              "\n\n[System: no relevant content found in this conversation's uploaded documents (or none have been uploaded). Use the Research Agent instead.]";
+          }
         }
       } catch (error) {
         // No documents ingested yet (e.g. vector index not created) — treat
@@ -242,11 +396,14 @@ export async function handleChat(
       }
     }
 
-    const documentNote = documentResult
-      ? `\n\n[System: document ingested — documentId: ${documentResult.documentId}, filename: ${documentResult.filename}, ${documentResult.totalChunks} chunks indexed.]`
-      : "";
+    const documentNote =
+      documentResults.length > 0
+        ? `\n\n[System: ${documentResults.length} document(s) ingested — ${documentResults
+            .map((d) => `documentId: ${d.documentId}, filename: ${d.filename}, ${d.totalChunks} chunks indexed`)
+            .join("; ")}.]`
+        : "";
 
-    const supervisorMessage = `${message || "I've uploaded a document."}${documentNote}${retrievalNote}`;
+    const supervisorMessage = `${message || "I've uploaded document(s)."}${documentNote}${retrievalNote}`;
 
     console.log(`[Chat] Message: ${supervisorMessage.substring(0, 150)}...`);
 
@@ -255,7 +412,17 @@ export async function handleChat(
     const delegatedAgents: string[] = [];
     const startTime = Date.now();
 
-    const response = await supervisorAgent.generate(supervisorMessage, {
+    const supervisorInput = retrievalMetadata
+      ? [
+          {
+            role: "user" as const,
+            content: supervisorMessage,
+            metadata: retrievalMetadata,
+          },
+        ]
+      : supervisorMessage;
+
+    const response = await supervisorAgent.generate(supervisorInput, {
       memory: {
         thread: conversationId,
         resource: userId,
@@ -282,7 +449,7 @@ export async function handleChat(
       timestamp: new Date().toISOString(),
       executionTimeMs: executionTime,
       agentsInvolved: ["supervisor", ...new Set(delegatedAgents)],
-      document: documentResult,
+      documents: documentResults,
       retrieval: ranQuery ? { ranQuery, relevantChunksFound } : null,
     });
   } catch (error) {

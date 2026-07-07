@@ -10,10 +10,12 @@ import {
 
 
 const upload = multer({ storage: multer.memoryStorage() });
+const MAX_CHAT_FILES = 5;
 
 export function setupRoutes(app: Express) {
-  // Chat endpoint (file attachment is optional — multer passes through when absent)
-  app.post("/api/chat", upload.single("file"), handleChat);
+  // Chat endpoint (file attachments are optional — multer passes through when absent).
+  // Accepts up to MAX_CHAT_FILES files under the repeated "files" field.
+  app.post("/api/chat", upload.array("files", MAX_CHAT_FILES), handleChat);
 
   /**
    * @openapi
