@@ -1,6 +1,20 @@
 import { MDocument } from "@mastra/rag";
+import { getEncoding } from "js-tiktoken";
 import { logger } from "../../utils/logger";
 import { DocumentFormat } from "../../types/index";
+
+// cl100k_base matches OpenAI's text-embedding-3-small tokenizer. Loaded once
+// at module scope since building the encoding table is expensive.
+const tokenEncoding = getEncoding("cl100k_base");
+
+// `maxSize`/`overlap` in ChunkingConfig are documented as token counts, but
+// @mastra/rag's chunker defaults to counting plain characters unless given an
+// explicit lengthFunction — without this, "512 tokens" was actually being
+// enforced as 512 characters (~128 tokens), producing ~4x more chunks (and
+// downstream embeddings/DB writes) than intended.
+function countTokens(text: string): number {
+  return tokenEncoding.encode(text).length;
+}
 
 // ============================================================================
 // CHUNKING CONFIGURATION
@@ -66,6 +80,7 @@ async function recursiveChunk(
       maxSize: config.maxSize,
       overlap: config.overlap,
       separators: config.separators,
+      lengthFunction: countTokens,
     });
 
     const chunks: Chunk[] = chunkedDocs.map((mastraChunk, index) => ({

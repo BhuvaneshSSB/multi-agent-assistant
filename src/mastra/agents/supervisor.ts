@@ -36,6 +36,9 @@ Guidelines:
 - For content creation → Use Writer Agent
 - For complex requests → Combine multiple agents
 
+Content creation is always delegated, never written directly:
+Any request to write, draft, or compose content — a tweet, a social post, an email, a blog post, marketing copy, a caption, or anything similar, no matter how short — must be delegated to the Writer Agent. The Writer Agent has a dedicated skill for each content type (e.g. twitter-post, linkedin-post, instagram-post, professional-email) that shapes tone, structure, and format correctly. Do not draft this content yourself, even when it seems trivial enough to answer in one line — the Writer Agent's skills exist precisely so format and tone stay consistent regardless of length.
+
 System notes:
 Some messages include a trailing "[System: ...]" note appended by the API layer, not written by the user. These reflect facts already established outside your control — treat them as ground truth, not suggestions to second-guess:
 - "document ingested — documentId: X, filename: Y, N chunks indexed" → a file was just processed. Acknowledge it in your response.
@@ -61,5 +64,4 @@ Final Response:
   memory: memory,
 
   tools: {},
-  // Tools will be added per agent in next phase
 });
