@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from "express";
 import { supervisorAgent } from "../mastra/agents/supervisor";
 import { executeDocumentIngestion } from "../mastra/workflows/document-ingestion";
-import { hybridSearchChunks } from "../mastra/tools/embeddings";
+import { hybridSearchChunks, getAllChunksForDocument } from "../mastra/tools/embeddings";
 import { getStore } from "../mastra/storage/store";
 import { ValidationError, DocumentFormat } from "../types/index";
 import { logger } from "../utils/logger";
@@ -20,6 +20,16 @@ const COMPARISON_INTENT_REGEX =
 const COMPARISON_PER_DOC_TOP_K = 3;
 const MAX_COMPARISON_DOCUMENTS = 5; // beyond this, fall back to the global-topK path rather than firing unbounded concurrent searches
 
+// Deterministic whole-document-intent gate, same rationale as the comparison
+// gate above: "summarize this" has no specific semantic content to match
+// against any one chunk (it's a request for the whole document, not a fact
+// lookup), so plain similarity/keyword search reliably returns zero hits —
+// a query-shape mismatch, not a real "nothing relevant" signal. False
+// negatives just fall back to the existing global-topK path.
+const SUMMARY_INTENT_REGEX =
+  /\b(summar(y|ize|ise|izing|ising|ies)|overview|tl;?dr|key\s*(points|takeaways)|main\s*points|gist|recap)\b/i;
+const WHOLE_DOCUMENT_CHAR_BUDGET = 40000; // ~10k tokens, safe alongside the rest of the prompt
+
 // Structured, durable record of which documents/chunks a turn's retrieval
 // gate drew on — attached to the persisted message's `content.metadata` so
 // the association survives independent of the `[System: ...]` note's wording.
@@ -30,7 +40,23 @@ interface RetrievalTurnMetadata {
     filename?: string;
     chunkIndex: number;
     pageNumber?: number;
+    pageRangeStart?: number;
+    pageRangeEnd?: number;
   }>;
+}
+
+// Single source of truth for how a page citation is rendered into a prompt —
+// only ever states a page/range the chunk metadata actually has; never
+// invents one. See docs/test/16-closing-report.md for the bug this replaced
+// (the model stating a specific page number it was never given).
+function formatPageCitation(meta: {
+  pageNumber?: number;
+  pageRangeStart?: number;
+  pageRangeEnd?: number;
+}): string {
+  if (meta.pageNumber) return `page ${meta.pageNumber}`;
+  if (meta.pageRangeStart && meta.pageRangeEnd) return `pages ${meta.pageRangeStart}-${meta.pageRangeEnd}`;
+  return "";
 }
 
 interface DocumentIngestionResult {
@@ -298,6 +324,11 @@ export async function handleChat(
           completedDocuments.length >= 2 &&
           completedDocuments.length <= MAX_COMPARISON_DOCUMENTS;
 
+        const useWholeDocumentBranch =
+          !useComparisonBranch &&
+          SUMMARY_INTENT_REGEX.test(message) &&
+          completedDocuments.length >= 1;
+
         if (useComparisonBranch) {
           // Comparison request: search each document separately (instead of
           // one shared global top-K) so every document gets a guaranteed
@@ -329,10 +360,10 @@ export async function handleChat(
                 return `### ${doc.filename} (documentId: ${doc.id})\n(no relevant content retrieved for this document)`;
               }
               const chunksText = docResults
-                .map(
-                  (r, i) =>
-                    `[${i + 1}]${r.metadata.pageNumber ? ` (page ${r.metadata.pageNumber})` : ""} ${r.metadata.chunkContent}`
-                )
+                .map((r, i) => {
+                  const citation = formatPageCitation(r.metadata);
+                  return `[${i + 1}]${citation ? ` (${citation})` : ""} ${r.metadata.chunkContent}`;
+                })
                 .join("\n\n");
               return `### ${doc.filename} (documentId: ${doc.id})\n${chunksText}`;
             });
@@ -345,6 +376,8 @@ export async function handleChat(
                 filename: filenameById.get(r.metadata.documentId),
                 chunkIndex: r.metadata.chunkIndex,
                 pageNumber: r.metadata.pageNumber,
+                pageRangeStart: r.metadata.pageRangeStart,
+                pageRangeEnd: r.metadata.pageRangeEnd,
               }))
             );
             retrievalMetadata = {
@@ -354,6 +387,68 @@ export async function handleChat(
           } else {
             retrievalNote =
               "\n\n[System: no relevant content found in this conversation's uploaded documents for this comparison request. Use the Research Agent instead, or ask the user to clarify.]";
+          }
+        } else if (useWholeDocumentBranch) {
+          // Whole-document request ("summarize this", "give me an overview"):
+          // prefer the file(s) just uploaded in this request — "this" in
+          // "summarize this" refers to what the user just attached — and
+          // only fall back to previously uploaded documents in the
+          // conversation when nothing was uploaded this turn.
+          const justUploadedIds = new Set(documentResults.map((d) => d.documentId));
+          let targetDocuments = completedDocuments.filter((d) => justUploadedIds.has(d.id));
+          if (targetDocuments.length === 0) {
+            targetDocuments =
+              completedDocuments.length <= MAX_COMPARISON_DOCUMENTS
+                ? completedDocuments
+                : completedDocuments.slice(-1); // ambiguous otherwise — default to the most recently uploaded
+          }
+
+          const docChunkResults = await withRetry(
+            () =>
+              Promise.all(
+                targetDocuments.map((doc) =>
+                  getAllChunksForDocument(doc.id, WHOLE_DOCUMENT_CHAR_BUDGET)
+                )
+              ),
+            { maxRetries: 2, baseDelayMs: 300, maxDelayMs: 2000, label: "retrieval-gate whole-document fetch" }
+          );
+
+          relevantChunksFound = docChunkResults.reduce((sum, r) => sum + r.chunks.length, 0);
+
+          if (relevantChunksFound > 0) {
+            const sections = targetDocuments.map((doc, idx) => {
+              const docResult = docChunkResults[idx];
+              const chunksText = docResult.chunks
+                .map((c) => {
+                  const citation = formatPageCitation(c);
+                  return `${citation ? `(${citation}) ` : ""}${c.content}`;
+                })
+                .join("\n\n");
+              const truncationNote = docResult.truncated
+                ? `\n[Note: truncated to the first ${docResult.chunks.length} of ${docResult.totalChunkCount} chunks for length; mention this if the summary may be incomplete.]`
+                : "";
+              return `### ${doc.filename} (documentId: ${doc.id})\n${chunksText}${truncationNote}`;
+            });
+
+            retrievalNote = `\n\n[System: whole-document request detected (e.g. "summarize"). Below is the full ordered content of the relevant document(s) in this conversation — not a similarity search result. Use the Document Agent to answer directly from this content:\n\n${sections.join("\n\n")}]`;
+
+            const documentRefs = targetDocuments.flatMap((doc, idx) =>
+              docChunkResults[idx].chunks.map((c) => ({
+                documentId: doc.id,
+                filename: doc.filename,
+                chunkIndex: c.chunkIndex,
+                pageNumber: c.pageNumber,
+                pageRangeStart: c.pageRangeStart,
+                pageRangeEnd: c.pageRangeEnd,
+              }))
+            );
+            retrievalMetadata = {
+              documentIds: [...new Set(documentRefs.map((d) => d.documentId))],
+              documentRefs,
+            };
+          } else {
+            retrievalNote =
+              "\n\n[System: whole-document request detected but no content was found for the uploaded document(s) — ingestion may still be indexing. Use the Research Agent instead, or ask the user to retry shortly.]";
           }
         } else {
           const results = await withRetry(
@@ -366,8 +461,9 @@ export async function handleChat(
             const context = results
               .map((r, i) => {
                 const filename = filenameById.get(r.metadata.documentId);
+                const citation = formatPageCitation(r.metadata);
                 return `[${i + 1}] (file: ${filename ?? "unknown"}, documentId: ${r.metadata.documentId}${
-                  r.metadata.pageNumber ? `, page ${r.metadata.pageNumber}` : ""
+                  citation ? `, ${citation}` : ""
                 }) ${r.metadata.chunkContent}`;
               })
               .join("\n\n");
@@ -379,6 +475,8 @@ export async function handleChat(
               filename: filenameById.get(r.metadata.documentId),
               chunkIndex: r.metadata.chunkIndex,
               pageNumber: r.metadata.pageNumber,
+              pageRangeStart: r.metadata.pageRangeStart,
+              pageRangeEnd: r.metadata.pageRangeEnd,
             }));
             retrievalMetadata = {
               documentIds: [...new Set(documentRefs.map((d) => d.documentId))],

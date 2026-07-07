@@ -33,8 +33,15 @@ export async function parsePDF(buffer: Buffer): Promise<string> {
     text += `\nPages: ${textResult.total}\n\n`;
     text += "---\n\n";
 
-    // Add page content
-    text += textResult.text;
+    // Add page content, one page at a time (not the flattened textResult.text)
+    // so each page is preceded by an explicit marker chunking.ts can parse
+    // back out. Without this, PDF/DOCX chunks never carry real page numbers
+    // (see the citation-hallucination fix in docs/test/16-closing-report.md)
+    // — mirrors the existing `## Slide N` / `## Sheet:` marker convention
+    // already used for PPTX/XLSX parsing in this file.
+    for (const page of textResult.pages) {
+      text += `\n\n[[[PDF_PAGE:${page.num}]]]\n\n${page.text}`;
+    }
 
     console.log(`[PDF Parser] Extracted ${textResult.total} pages, ${textResult.text.length} characters`);
     return text;

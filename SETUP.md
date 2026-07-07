@@ -14,11 +14,10 @@
 Create a `.env` file in the project root:
 
 ```bash
-# Required
 OPENAI_API_KEY=sk-...
 DATABASE_URL=postgresql://postgres:postgres@localhost:5432/multi_agent
 
-# Optional
+
 ANTHROPIC_API_KEY=sk-ant-...
 NEWS_API_KEY=...
 API_PORT=3000
@@ -49,11 +48,7 @@ If you're using the Docker Compose Postgres service as-is, `DATABASE_URL` above 
 
    This starts the Express server on `http://localhost:3000`, initializes the Postgres pool, and registers all Mastra agents/workflows.
 
-4. **(Optional) Run the Mastra Studio** for interactively inspecting/testing agents, workflows, and traces:
 
-   ```bash
-   npm run studio
-   ```
 
 ## Option B: Full stack in Docker (Postgres + backend + Streamlit frontend)
 

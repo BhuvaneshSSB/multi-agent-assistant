@@ -46,6 +46,8 @@ const chunkSchema = z.object({
   metadata: z.object({
     documentId: z.string().optional(),
     pageNumber: z.number().optional(),
+    pageRangeStart: z.number().optional(),
+    pageRangeEnd: z.number().optional(),
     sectionTitle: z.string().optional(),
     sourceOffset: z.number(),
     contentType: z.enum(["text", "image_caption"]).optional(),

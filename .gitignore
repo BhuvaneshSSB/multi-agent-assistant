@@ -11,7 +11,7 @@ dist
 *.duckdb
 *.duckdb.wal
 docs
-
+scratchpad
 # Streamlit frontend
 streamlit-frontend/.venv
 streamlit-frontend/venv

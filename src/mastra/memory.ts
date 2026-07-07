@@ -39,8 +39,15 @@ export const memory = new Memory({
     },
 
     // Layer 3: Working Memory
+    // scope: "thread" isolates working memory per conversationId rather than
+    // the library default of "resource" (per userId) — the rest of the app
+    // (document storage, retrieval-gate) already treats conversationId as
+    // the isolation boundary; leaving this at the resource-scoped default
+    // leaked document summaries/findings across a user's unrelated
+    // conversations.
     workingMemory: {
       enabled: true,
+      scope: "thread",
       template: `# User Context
 - Name:
 - Preferences:
@@ -49,6 +56,13 @@ export const memory = new Memory({
     },
 
     // Layer 4: Semantic Recall
-    semanticRecall: true,
+    // Same thread-scoping rationale as workingMemory above — replaces the
+    // `true` shorthand so scope can be set explicitly; topK/messageRange
+    // preserve the library's previous implicit defaults.
+    semanticRecall: {
+      scope: "thread",
+      topK: 4,
+      messageRange: { before: 1, after: 1 },
+    },
   },
 });

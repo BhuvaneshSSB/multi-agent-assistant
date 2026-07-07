@@ -210,6 +210,8 @@ export interface EmbeddingMetadata {
   chunkIndex: number;
   chunkContent: string;
   pageNumber?: number;
+  pageRangeStart?: number;
+  pageRangeEnd?: number;
   sectionTitle?: string;
   contentType?: string;
   hierarchy?: string[];
@@ -258,6 +260,8 @@ export async function storeEmbeddings(
       chunkIndex: m.chunkIndex,
       chunkContent: m.chunkContent,
       pageNumber: m.pageNumber,
+      pageRangeStart: m.pageRangeStart,
+      pageRangeEnd: m.pageRangeEnd,
       sectionTitle: m.sectionTitle,
       contentType: m.contentType,
       hierarchy: m.hierarchy ? JSON.stringify(m.hierarchy) : null,
@@ -328,6 +332,8 @@ export async function embedAndStoreChunks(
       chunkIndex: chunk.index,
       chunkContent: chunk.content,
       pageNumber: chunk.metadata.pageNumber,
+      pageRangeStart: chunk.metadata.pageRangeStart,
+      pageRangeEnd: chunk.metadata.pageRangeEnd,
       sectionTitle: chunk.metadata.sectionTitle,
       contentType: chunk.metadata.contentType ?? "text",
     }));
@@ -608,6 +614,67 @@ export async function keywordSearchChunks(
     });
     return [];
   }
+}
+
+// ============================================================================
+// FULL DOCUMENT FETCH (ORDERED, NOT SEARCH-BASED)
+// ============================================================================
+//
+// For whole-document requests ("summarize this", "give me an overview") the
+// user's message has no specific semantic content to match against any one
+// chunk, so similarity/keyword search over it reliably returns zero hits —
+// that's not a relevance signal, it's a query-shape mismatch. This bypasses
+// search entirely and returns the document's chunks in original order, up to
+// a char budget, so a caller can hand the (near-)full text to an agent.
+
+export interface DocumentChunksResult {
+  documentId: string;
+  chunks: {
+    chunkIndex: number;
+    content: string;
+    pageNumber?: number;
+    pageRangeStart?: number;
+    pageRangeEnd?: number;
+  }[];
+  truncated: boolean;
+  totalChunkCount: number;
+}
+
+export async function getAllChunksForDocument(
+  documentId: string,
+  maxChars: number = 40000 // ~10k tokens, safe budget alongside the rest of the prompt
+): Promise<DocumentChunksResult> {
+  const db = getDatabase();
+  const table = `"${EMBEDDING_CONFIG.indexName}"`;
+
+  const result = await db.query(
+    `SELECT metadata FROM ${table}
+     WHERE metadata->>'documentId' = $1
+     ORDER BY (metadata->>'chunkIndex')::int ASC`,
+    [documentId]
+  );
+  const rows = result.rows as { metadata: EmbeddingMetadata }[];
+
+  let usedChars = 0;
+  const chunks: DocumentChunksResult["chunks"] = [];
+  let truncated = false;
+  for (const row of rows) {
+    const content = row.metadata.chunkContent;
+    if (usedChars + content.length > maxChars && chunks.length > 0) {
+      truncated = true;
+      break;
+    }
+    chunks.push({
+      chunkIndex: row.metadata.chunkIndex,
+      content,
+      pageNumber: row.metadata.pageNumber,
+      pageRangeStart: row.metadata.pageRangeStart,
+      pageRangeEnd: row.metadata.pageRangeEnd,
+    });
+    usedChars += content.length;
+  }
+
+  return { documentId, chunks, truncated, totalChunkCount: rows.length };
 }
 
 // ============================================================================
