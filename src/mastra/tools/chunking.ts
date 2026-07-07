@@ -2,6 +2,7 @@ import { MDocument } from "@mastra/rag";
 import { getEncoding } from "js-tiktoken";
 import { logger } from "../../utils/logger";
 import { DocumentFormat } from "../../types/index";
+import type { ImageCaption } from "./image-captioner";
 
 // cl100k_base matches OpenAI's text-embedding-3-small tokenizer. Loaded once
 // at module scope since building the encoding table is expensive.
@@ -57,9 +58,32 @@ export interface Chunk {
   metadata: {
     documentId?: string;
     pageNumber?: number;
+    // Set instead of pageNumber when a chunk's content spans more than one
+    // PDF page (e.g. a whole short document collapsing into a single chunk)
+    // — an honest "pages X-Y" citation instead of a fabricated single page.
+    pageRangeStart?: number;
+    pageRangeEnd?: number;
     sectionTitle?: string;
     sourceOffset: number;
+    contentType?: "text" | "image_caption";
   };
+}
+
+// ============================================================================
+// IMAGE CAPTION CHUNKS (from extractAndCaptionImages, PDF only)
+// ============================================================================
+
+export function imageCaptionsToChunks(captions: ImageCaption[], startIndex: number): Chunk[] {
+  return captions.map((c, offset) => ({
+    id: `chunk-image-${startIndex + offset}`,
+    index: startIndex + offset,
+    content: `[Image, page ${c.pageNumber}] ${c.caption}`,
+    metadata: {
+      pageNumber: c.pageNumber,
+      sourceOffset: 0,
+      contentType: "image_caption" as const,
+    },
+  }));
 }
 
 // ============================================================================
@@ -99,6 +123,156 @@ async function recursiveChunk(
     return chunks;
   } catch (error) {
     logger.error("[Chunking] Recursive chunking failed", { error });
+    throw error;
+  }
+}
+
+// ============================================================================
+// STRATEGY 1B: PAGE-AWARE RECURSIVE CHUNKING (PDF)
+// ============================================================================
+//
+// parsePDF (document-parser.ts) precedes each page's text with a
+// `[[[PDF_PAGE:n]]]` marker, the same convention already used for `## Slide
+// N` (PPTX) and `## Sheet:` (XLSX). Chunk boundaries are still decided by the
+// same token-aware recursive splitter used for DOCX — a PDF page isn't a
+// natural semantic unit the way a slide is, so we don't want to force a
+// chunk break at every page boundary — but after chunking, each chunk's real
+// character range in the marker-stripped text is used to look up which
+// page(s) it actually came from, so a chunk spanning multiple pages gets an
+// honest `pageRangeStart`/`pageRangeEnd` instead of a silently absent
+// `pageNumber` that the model would otherwise invent a value for.
+
+const PDF_PAGE_MARKER = /\[\[\[PDF_PAGE:(\d+)\]\]\]/g;
+
+function extractPdfPageOffsets(text: string): {
+  cleanText: string;
+  pageRanges: { page: number; start: number; end: number }[];
+} {
+  const pageRanges: { page: number; start: number; end: number }[] = [];
+  let cleanText = "";
+  let lastIndex = 0;
+  const regex = new RegExp(PDF_PAGE_MARKER.source, "g");
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(text)) !== null) {
+    cleanText += text.slice(lastIndex, match.index);
+    if (pageRanges.length > 0) {
+      pageRanges[pageRanges.length - 1].end = cleanText.length;
+    }
+    pageRanges.push({ page: parseInt(match[1], 10), start: cleanText.length, end: cleanText.length });
+    lastIndex = match.index + match[0].length;
+  }
+  cleanText += text.slice(lastIndex);
+  if (pageRanges.length > 0) {
+    pageRanges[pageRanges.length - 1].end = cleanText.length;
+  }
+
+  return { cleanText: cleanText.trim(), pageRanges };
+}
+
+// MDocument's recursive splitter normalizes whitespace when it rejoins split
+// segments into chunk text (consecutive blank lines collapse to one), so a
+// chunk's `.text` is not always an exact substring of the pre-chunk text —
+// an exact indexOf lookup silently fails and every chunk loses page
+// attribution. Collapsing both sides to single-space-separated text before
+// searching, then mapping the match position back through `toOriginal`,
+// finds the real offset regardless of that normalization.
+function collapseWhitespace(s: string): { collapsed: string; toOriginal: number[] } {
+  let collapsed = "";
+  const toOriginal: number[] = [];
+  let inWhitespace = false;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (/\s/.test(ch)) {
+      if (!inWhitespace) {
+        collapsed += " ";
+        toOriginal.push(i);
+        inWhitespace = true;
+      }
+    } else {
+      collapsed += ch;
+      toOriginal.push(i);
+      inWhitespace = false;
+    }
+  }
+  return { collapsed, toOriginal };
+}
+
+async function pdfAwareChunk(
+  text: string,
+  config: ChunkingConfig = DEFAULT_CHUNKING_CONFIG
+): Promise<Chunk[]> {
+  try {
+    logger.info("[Chunking] Using page-aware recursive strategy for PDF");
+
+    const { cleanText, pageRanges } = extractPdfPageOffsets(text);
+
+    // No page markers found (e.g. raw text handed directly to the
+    // /api/test/chunk-document diagnostic endpoint, not real parsePDF
+    // output) — fall back to plain recursive chunking, same as before.
+    if (pageRanges.length === 0) {
+      return recursiveChunk(text, config);
+    }
+
+    const doc = MDocument.fromText(cleanText, { metadata: { format: "text" } });
+    const chunkedDocs = await doc.chunk({
+      strategy: "recursive",
+      maxSize: config.maxSize,
+      overlap: config.overlap,
+      separators: config.separators,
+      lengthFunction: countTokens,
+    });
+
+    const { collapsed: collapsedClean, toOriginal } = collapseWhitespace(cleanText);
+
+    let searchFrom = 0; // in collapsed-text coordinates
+    const chunks: Chunk[] = chunkedDocs.map((mastraChunk, index) => {
+      const content = mastraChunk.text;
+      const { collapsed: collapsedChunk } = collapseWhitespace(content);
+
+      let collapsedStart = collapsedClean.indexOf(collapsedChunk, searchFrom);
+      if (collapsedStart === -1) {
+        // Overlap can make a chunk start slightly before the previous
+        // chunk's match position — retry a full-text search rather than
+        // lose page attribution entirely for this one chunk.
+        collapsedStart = collapsedClean.indexOf(collapsedChunk);
+      }
+
+      let start = -1;
+      let end = -1;
+      if (collapsedStart !== -1) {
+        start = toOriginal[collapsedStart] ?? 0;
+        const collapsedEnd = collapsedStart + collapsedChunk.length;
+        end = collapsedEnd < toOriginal.length ? toOriginal[collapsedEnd] : cleanText.length;
+        searchFrom = collapsedStart;
+      }
+
+      const overlappingPages =
+        start === -1 ? [] : pageRanges.filter((p) => p.start < end && p.end > start).map((p) => p.page);
+
+      const pageNumber = overlappingPages.length === 1 ? overlappingPages[0] : undefined;
+      const pageRangeStart = overlappingPages.length > 1 ? Math.min(...overlappingPages) : undefined;
+      const pageRangeEnd = overlappingPages.length > 1 ? Math.max(...overlappingPages) : undefined;
+
+      return {
+        id: `chunk-${index}`,
+        index,
+        content,
+        metadata: {
+          sourceOffset: start === -1 ? 0 : start,
+          ...(pageNumber !== undefined ? { pageNumber } : {}),
+          ...(pageRangeStart !== undefined ? { pageRangeStart, pageRangeEnd } : {}),
+        },
+      };
+    });
+
+    logger.info("[Chunking] Page-aware PDF chunking completed", {
+      totalChunks: chunks.length,
+      pagesDetected: pageRanges.length,
+    });
+
+    return chunks;
+  } catch (error) {
+    logger.error("[Chunking] Page-aware PDF chunking failed", { error });
     throw error;
   }
 }
@@ -357,7 +531,8 @@ export async function chunkDocumentFormatAware(
   text: string,
   format: DocumentFormat,
   documentId?: string,
-  config: ChunkingConfig = DEFAULT_CHUNKING_CONFIG
+  config: ChunkingConfig = DEFAULT_CHUNKING_CONFIG,
+  imageCaptions: ImageCaption[] = []
 ): Promise<Chunk[]> {
   try {
     logger.info("[Chunking] Starting format-aware chunking", {
@@ -369,8 +544,8 @@ export async function chunkDocumentFormatAware(
 
     switch (format) {
       case "pdf":
-        logger.info("[Chunking] PDF detected - using recursive strategy");
-        chunks = await recursiveChunk(text, config);
+        logger.info("[Chunking] PDF detected - using page-aware recursive strategy");
+        chunks = await pdfAwareChunk(text, config);
         break;
 
       case "docx":
@@ -396,6 +571,12 @@ export async function chunkDocumentFormatAware(
       default:
         logger.warn(`[Chunking] Unknown format: ${format}, using recursive fallback`);
         chunks = await recursiveChunk(text, config);
+    }
+
+    // Append image-caption chunks (PDF only, populated via extractAndCaptionImages)
+    // after the text chunks, so retrieval treats image content as ordinary chunks.
+    if (imageCaptions.length > 0) {
+      chunks = [...chunks, ...imageCaptionsToChunks(imageCaptions, chunks.length)];
     }
 
     // Add documentId to all chunks if provided

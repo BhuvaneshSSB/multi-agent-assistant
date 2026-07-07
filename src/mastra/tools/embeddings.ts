@@ -210,6 +210,8 @@ export interface EmbeddingMetadata {
   chunkIndex: number;
   chunkContent: string;
   pageNumber?: number;
+  pageRangeStart?: number;
+  pageRangeEnd?: number;
   sectionTitle?: string;
   contentType?: string;
   hierarchy?: string[];
@@ -258,6 +260,8 @@ export async function storeEmbeddings(
       chunkIndex: m.chunkIndex,
       chunkContent: m.chunkContent,
       pageNumber: m.pageNumber,
+      pageRangeStart: m.pageRangeStart,
+      pageRangeEnd: m.pageRangeEnd,
       sectionTitle: m.sectionTitle,
       contentType: m.contentType,
       hierarchy: m.hierarchy ? JSON.stringify(m.hierarchy) : null,
@@ -328,7 +332,10 @@ export async function embedAndStoreChunks(
       chunkIndex: chunk.index,
       chunkContent: chunk.content,
       pageNumber: chunk.metadata.pageNumber,
+      pageRangeStart: chunk.metadata.pageRangeStart,
+      pageRangeEnd: chunk.metadata.pageRangeEnd,
       sectionTitle: chunk.metadata.sectionTitle,
+      contentType: chunk.metadata.contentType ?? "text",
     }));
 
     // Step 4: Store embeddings with metadata
@@ -363,7 +370,8 @@ export async function searchSimilarChunks(
   query: string,
   topK: number = 5,
   similarityThreshold: number = 0.5,
-  conversationId?: string
+  conversationId?: string,
+  documentId?: string
 ): Promise<SearchResult[]> {
   try {
     logger.info("[Embedding] Searching similar chunks", {
@@ -371,6 +379,7 @@ export async function searchSimilarChunks(
       topK,
       threshold: similarityThreshold,
       conversationId,
+      documentId,
     });
 
     // Step 1: Generate embedding for query
@@ -384,14 +393,20 @@ export async function searchSimilarChunks(
       dimension: queryVector.length,
     });
 
-    // Step 2: Search in PgVector, scoped to the conversation when provided
-    // so unrelated conversations' documents never surface as answers.
+    // Step 2: Search in PgVector, scoped to the conversation (and optionally
+    // a single document within it, for per-document comparison retrieval) so
+    // unrelated conversations'/documents' content never surfaces as an answer.
+    const filter =
+      conversationId || documentId
+        ? { ...(conversationId ? { conversationId } : {}), ...(documentId ? { documentId } : {}) }
+        : undefined;
+
     const results = await pgVector.query({
       indexName: EMBEDDING_CONFIG.indexName,
       queryVector,
       topK,
       minScore: similarityThreshold,
-      filter: conversationId ? { conversationId } : undefined,
+      filter,
     });
 
     logger.info("[Embedding] Search completed", {
@@ -519,7 +534,8 @@ async function runKeywordQuery(
   tsqueryExpr: string,
   query: string,
   topK: number,
-  conversationId?: string
+  conversationId?: string,
+  documentId?: string
 ): Promise<SearchResult[]> {
   const db = getDatabase();
   const table = `"${EMBEDDING_CONFIG.indexName}"`;
@@ -529,6 +545,11 @@ async function runKeywordQuery(
   if (conversationId) {
     conditions.push(`metadata->>'conversationId' = $${params.length + 1}`);
     params.push(conversationId);
+  }
+
+  if (documentId) {
+    conditions.push(`metadata->>'documentId' = $${params.length + 1}`);
+    params.push(documentId);
   }
 
   params.push(topK);
@@ -561,19 +582,21 @@ export interface KeywordSearchResult extends SearchResult {
 export async function keywordSearchChunks(
   query: string,
   topK: number = 5,
-  conversationId?: string
+  conversationId?: string,
+  documentId?: string
 ): Promise<KeywordSearchResult[]> {
   try {
     logger.info("[Embedding] Running keyword search", {
       query: query.substring(0, 100),
       topK,
       conversationId,
+      documentId,
     });
 
-    let rows = await runKeywordQuery(AND_TSQUERY, query, topK, conversationId);
+    let rows = await runKeywordQuery(AND_TSQUERY, query, topK, conversationId, documentId);
     let matchTier: KeywordSearchResult["matchTier"] = "strict";
     if (rows.length === 0) {
-      rows = await runKeywordQuery(OR_TSQUERY, query, topK, conversationId);
+      rows = await runKeywordQuery(OR_TSQUERY, query, topK, conversationId, documentId);
       matchTier = "loose";
     }
 
@@ -591,6 +614,67 @@ export async function keywordSearchChunks(
     });
     return [];
   }
+}
+
+// ============================================================================
+// FULL DOCUMENT FETCH (ORDERED, NOT SEARCH-BASED)
+// ============================================================================
+//
+// For whole-document requests ("summarize this", "give me an overview") the
+// user's message has no specific semantic content to match against any one
+// chunk, so similarity/keyword search over it reliably returns zero hits —
+// that's not a relevance signal, it's a query-shape mismatch. This bypasses
+// search entirely and returns the document's chunks in original order, up to
+// a char budget, so a caller can hand the (near-)full text to an agent.
+
+export interface DocumentChunksResult {
+  documentId: string;
+  chunks: {
+    chunkIndex: number;
+    content: string;
+    pageNumber?: number;
+    pageRangeStart?: number;
+    pageRangeEnd?: number;
+  }[];
+  truncated: boolean;
+  totalChunkCount: number;
+}
+
+export async function getAllChunksForDocument(
+  documentId: string,
+  maxChars: number = 40000 // ~10k tokens, safe budget alongside the rest of the prompt
+): Promise<DocumentChunksResult> {
+  const db = getDatabase();
+  const table = `"${EMBEDDING_CONFIG.indexName}"`;
+
+  const result = await db.query(
+    `SELECT metadata FROM ${table}
+     WHERE metadata->>'documentId' = $1
+     ORDER BY (metadata->>'chunkIndex')::int ASC`,
+    [documentId]
+  );
+  const rows = result.rows as { metadata: EmbeddingMetadata }[];
+
+  let usedChars = 0;
+  const chunks: DocumentChunksResult["chunks"] = [];
+  let truncated = false;
+  for (const row of rows) {
+    const content = row.metadata.chunkContent;
+    if (usedChars + content.length > maxChars && chunks.length > 0) {
+      truncated = true;
+      break;
+    }
+    chunks.push({
+      chunkIndex: row.metadata.chunkIndex,
+      content,
+      pageNumber: row.metadata.pageNumber,
+      pageRangeStart: row.metadata.pageRangeStart,
+      pageRangeEnd: row.metadata.pageRangeEnd,
+    });
+    usedChars += content.length;
+  }
+
+  return { documentId, chunks, truncated, totalChunkCount: rows.length };
 }
 
 // ============================================================================
@@ -652,7 +736,8 @@ export async function hybridSearchChunks(
   topK: number = 5,
   conversationId?: string,
   vectorRelevanceThreshold: number = 0.5,
-  looseKeywordVectorFloor: number = 0.2
+  looseKeywordVectorFloor: number = 0.2,
+  documentId?: string
 ): Promise<SearchResult[]> {
   // Pull a wider candidate pool from each ranking than `topK` before fusing,
   // so a chunk that's e.g. #2 on keyword but outside vector's top-5 still
@@ -660,8 +745,8 @@ export async function hybridSearchChunks(
   const candidatePoolSize = topK * 4;
 
   const [vectorResults, keywordResults] = await Promise.all([
-    searchSimilarChunks(query, candidatePoolSize, 0, conversationId),
-    keywordSearchChunks(query, candidatePoolSize, conversationId),
+    searchSimilarChunks(query, candidatePoolSize, 0, conversationId, documentId),
+    keywordSearchChunks(query, candidatePoolSize, conversationId, documentId),
   ]);
 
   logger.info("[Embedding] Hybrid search completed", {

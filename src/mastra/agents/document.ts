@@ -53,6 +53,7 @@ const ingestDocumentTool = createTool({
         filename: result.filename,
         totalChunks: result.totalChunks,
         embeddingsGenerated: result.embeddingsGenerated,
+        imagesProcessed: result.imagesProcessed,
         status: result.status,
         executionTimeMs: result.executionTimeMs,
         message: `Document successfully ingested: ${result.totalChunks} chunks created and embedded`,
@@ -111,6 +112,8 @@ const searchDocumentTool = createTool({
           similarity: (r.score * 100).toFixed(2) + "%",
           content: r.metadata.chunkContent,
           pageNumber: r.metadata.pageNumber,
+          pageRangeStart: r.metadata.pageRangeStart,
+          pageRangeEnd: r.metadata.pageRangeEnd,
           sectionTitle: r.metadata.sectionTitle,
         })),
         instructions:
@@ -152,10 +155,24 @@ Your responsibilities:
 
 When answering questions:
 - Always reference the source document and section
-- Include page numbers or slide numbers when available
 - Quote relevant passages when appropriate
 - Explain context and relationships between sections
 - Note if information is missing or unclear
+
+Citations — never invent a page or slide number:
+- Only state a page or slide number if the context you were given for that specific passage
+  actually includes one. Never infer, estimate, or guess a page number from surrounding context,
+  document length, or general knowledge of how the file format is usually paginated.
+- If no page number is present for a passage you're citing, omit the page clause entirely (cite
+  just the filename/section) or say "page not available" — do not state a number.
+- Some results include a page range (pageRangeStart/pageRangeEnd) instead of a single page number
+  — this means the passage came from a chunk spanning multiple pages, and the exact page boundary
+  within that chunk's text was NOT tracked precisely enough to isolate. Citing the range verbatim
+  (e.g. "pages 1-2") is fine — but never narrow it down to a single page, even if the content
+  contains a heading, label, or other textual cue that seems to suggest one page over another —
+  that cue is not reliable evidence of the true page boundary and guessing from it is exactly the
+  fabrication this rule exists to prevent.
+  Wrong: given a range of pages 1-2, answering "this is on page 1." Right: "this is on pages 1-2."
 
 Document Processing:
 - When a document is uploaded, it goes through:
@@ -176,7 +193,13 @@ Best Practices:
 - Ask for clarification if question is ambiguous
 - Offer to search for additional information
 - Maintain document context in your responses
-- Note any limitations in the available data`,
+- Note any limitations in the available data
+
+Comparison Requests:
+- When asked to compare, contrast, or note differences/similarities between uploaded documents, first identify each distinct source document present in the provided context by its filename (shown in the retrieved context labels).
+- Structure your answer around each document individually before synthesizing: summarize what each file says on the relevant point, then explicitly state where they agree (similarities) and where they diverge (differences).
+- Attribute every claim to its specific source file by name (e.g. "contract_A.pdf states..." / "resume_B.pdf lists..."), never a generic "the document".
+- If the retrieved context lacks content for one of the documents being compared, say so explicitly rather than basing the comparison on only one side.`,
 
   tools: {
     "ingest-document": ingestDocumentTool,

@@ -28,19 +28,26 @@ with st.sidebar:
         st.session_state.messages = []
         st.rerun()
 
+MAX_FILES = 5
+
 # --- Render history ------------------------------------------------------
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
-        if msg.get("filename"):
-            st.caption(f"📎 {msg['filename']}")
+        for filename in msg.get("filenames") or []:
+            st.caption(f"📎 {filename}")
 
-# --- Input row: file attaches to the next message sent -------------------
-uploaded_file = st.file_uploader(
-    "Attach a document (optional)",
+# --- Input row: file(s) attach to the next message sent -------------------
+uploaded_files = st.file_uploader(
+    "Attach document(s) (optional, up to 5)",
     type=["pdf", "docx", "xlsx", "pptx", "csv"],
+    accept_multiple_files=True,
     key=f"uploader_{len(st.session_state.messages)}",
 )
+if uploaded_files and len(uploaded_files) > MAX_FILES:
+    st.warning(f"Only the first {MAX_FILES} files will be uploaded.")
+    uploaded_files = uploaded_files[:MAX_FILES]
+
 prompt = st.chat_input("Message the assistant...")
 
 if prompt:
@@ -48,14 +55,14 @@ if prompt:
 
     with st.chat_message("user"):
         st.markdown(user_text)
-        if uploaded_file:
+        for uploaded_file in uploaded_files or []:
             st.caption(f"📎 {uploaded_file.name}")
 
     st.session_state.messages.append(
         {
             "role": "user",
             "content": user_text,
-            "filename": uploaded_file.name if uploaded_file else None,
+            "filenames": [f.name for f in uploaded_files] if uploaded_files else [],
         }
     )
 
@@ -67,8 +74,8 @@ if prompt:
         data["message"] = user_text
 
     files = None
-    if uploaded_file is not None:
-        files = {"file": (uploaded_file.name, uploaded_file.getvalue())}
+    if uploaded_files:
+        files = [("files", (f.name, f.getvalue())) for f in uploaded_files]
 
     with st.chat_message("assistant"):
         with st.spinner("Thinking..."):
@@ -86,7 +93,7 @@ if prompt:
                     st.json(
                         {
                             "agentsInvolved": payload.get("agentsInvolved"),
-                            "document": payload.get("document"),
+                            "documents": payload.get("documents"),
                             "retrieval": payload.get("retrieval"),
                             "executionTimeMs": payload.get("executionTimeMs"),
                         }

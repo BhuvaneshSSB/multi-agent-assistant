@@ -67,6 +67,32 @@ export class Store {
     }
   }
 
+  // Ordered by created_at so callers get a stable, upload-order listing —
+  // used both to know which documents exist for comparison retrieval and to
+  // label retrieved chunks by filename instead of opaque documentId.
+  async getDocumentsByConversation(
+    conversationId: string
+  ): Promise<Array<{ id: string; filename: string; status: string }>> {
+    try {
+      const result = await this.db.query(
+        `SELECT id, filename, status
+         FROM documents
+         WHERE conversation_id = $1 AND status = 'completed'
+         ORDER BY created_at ASC`,
+        [conversationId]
+      );
+      return result.rows.map((row) => ({
+        id: row.id,
+        filename: row.filename,
+        status: row.status,
+      }));
+    } catch (error) {
+      throw new DatabaseError(
+        `Failed to fetch documents for conversation: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
+
   // ============================================================================
   // UTILITY OPERATIONS
   // ============================================================================
